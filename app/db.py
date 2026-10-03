@@ -51,6 +51,28 @@ CREATE TABLE IF NOT EXISTS events (
     detail TEXT    NOT NULL DEFAULT '{}'    -- JSON
 );
 CREATE INDEX IF NOT EXISTS events_kind_ts ON events (kind, ts_utc);
+
+-- One row per LLM call (CLAUDE.md non-negotiable 5). `parsed` and `validation` are filled in
+-- afterwards by the reader (T7); `status` is ok | error.
+CREATE TABLE IF NOT EXISTS llm_calls (
+    id             INTEGER PRIMARY KEY,
+    ts_utc         INTEGER NOT NULL,
+    purpose        TEXT    NOT NULL,
+    prompt_version TEXT    NOT NULL,
+    model          TEXT    NOT NULL,
+    provider       TEXT,
+    prompt         TEXT    NOT NULL,             -- system + user text exactly as sent
+    raw_response   TEXT,                         -- response body (error body on failure)
+    parsed         TEXT,                         -- JSON of the parsed answer, if any
+    validation     TEXT,                         -- outcome, e.g. ok | rejected: <reason>
+    status         TEXT    NOT NULL,
+    error          TEXT,
+    latency_ms     INTEGER,
+    tokens_in      INTEGER,
+    tokens_out     INTEGER,
+    cost_usd       REAL
+);
+CREATE INDEX IF NOT EXISTS llm_calls_ts ON llm_calls (ts_utc);
 """
 
 UPSERT_BAR = """
@@ -123,3 +145,36 @@ def load_bars(
     df.index = pd.to_datetime(df.pop("t_utc"), unit="s", utc=True)
     df.index.name = "t"
     return df
+
+
+def insert_llm_call(conn: sqlite3.Connection, row: dict) -> int:
+    cols = ", ".join(row)
+    params = ", ".join(f":{k}" for k in row)
+    with conn:
+        cur = conn.execute(f"INSERT INTO llm_calls ({cols}) VALUES ({params})", row)
+    return int(cur.lastrowid)
+
+
+def update_llm_call(
+    conn: sqlite3.Connection, call_id: int, parsed: str | None, validation: str
+) -> None:
+    """The reader records what it made of the answer."""
+    with conn:
+        conn.execute(
+            "UPDATE llm_calls SET parsed = ?, validation = ? WHERE id = ?",
+            (parsed, validation, call_id),
+        )
+
+
+def llm_spend_since(conn: sqlite3.Connection, since_utc: int) -> float:
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM llm_calls WHERE ts_utc >= ?", (since_utc,)
+    ).fetchone()
+    return float(row["s"])
+
+
+def event_exists_since(conn: sqlite3.Connection, kind: str, since_utc: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM events WHERE kind = ? AND ts_utc >= ? LIMIT 1", (kind, since_utc)
+    ).fetchone()
+    return row is not None
