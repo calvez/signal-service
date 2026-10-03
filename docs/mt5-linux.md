@@ -16,7 +16,8 @@ trader container
 1. `cp deploy/mt5/startup.ini.example deploy/mt5/startup.ini` and fill in `Login`, `Password`, `Server` (FTMO free trial first). Do this yourself on the server; don't paste the password into any chat.
 2. `cp deploy/mt5/BarPusher.set.example deploy/mt5/BarPusher.set` and set `IngestToken` to the value in `.env`.
 3. `sudo deploy/mt5/install.sh` — read it first. It:
-   - installs WineHQ stable (pinned with `apt-mark hold`), Xvfb, openbox, ImageMagick
+   - installs WineHQ stable **10.0** (pinned with `apt-mark hold`), Xvfb, openbox, ImageMagick. Not Wine 11: with it the MT5 installer and terminal stop with "A debugger has been found running in your system". Before any Wine upgrade, snapshot and test that MT5 still starts.
+   - disables Wine's Mono/Gecko install prompts (`WINEDLLOVERRIDES=mscoree,mshtml=`): on a display nobody watches they block forever
    - creates user `mt5`, starts the virtual display
    - installs MT5 silently (`mt5setup.exe /auto`)
    - copies the EA, compiles it headless with MetaEditor, installs `startup.ini` (mode 600) and the preset
