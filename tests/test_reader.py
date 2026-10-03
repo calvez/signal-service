@@ -112,6 +112,12 @@ def test_prompt_v1_loads():
     assert "Al Brooks" in system and "{symbol}" in user and "{schema_json}" in user
 
 
+def test_prompt_v2_keeps_v1_and_adds_the_limits():
+    s1, u1 = load_prompt("v1")
+    s2, u2 = load_prompt("v2")
+    assert u1 == u2 and "250 characters" in s2 and "ALWAYS come with a complete setup" in s2
+
+
 # ------------------------------------------------------------------ happy path
 def test_full_read_stores_alert_and_logs_call(settings):
     fake = FakeOpenRouter()

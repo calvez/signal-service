@@ -32,13 +32,13 @@ features:
 
 llm:
   # Benchmark 2-3 models on the same logged days before settling.
-  model: "SET-ME"               # an OpenRouter model id
+  model: "moonshotai/kimi-k3"   # OpenRouter model id (benchmark others on logged days)
   provider_order: []            # pin providers so behaviour doesn't drift
   allow_fallbacks: false
   temperature: 0
   timeout_sec: 30
   daily_budget_usd: 3.00
-  prompt_version: "v1"
+  prompt_version: "v2"
 
 # High-impact events, entered by hand for now. Times in the event's own zone.
 news:

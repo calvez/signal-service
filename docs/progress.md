@@ -81,3 +81,9 @@
 - Weekly CSV: Saturday 10:00 Berlin the bot sends `reads_<year>-W<week>.csv` (reads + his latest answer + simulated outcome; columns in `outcomes.CSV_COLUMNS`) and keeps a copy in `data/exports/`. Manual export: `uv run python scripts/export_csv.py --days 7 --out reads.csv`.
 - Tests: 196 in total. New: win/loss/same-bar/entry-bar cases for long and short, entry window edges (3rd bar counts, 4th does not), expiry and pending, bars outside the replay window ignored, database updates, summaries, CSV content, weekly job once per week.
 - Limits to keep in mind when reading the numbers: M5 high/low cannot show the order of events inside a bar (hence the conservative loss rule); there is no spread, slippage or commission; the 3-bar entry window and "hold until cash close" are my reading of the task and easy to change in `outcomes.py`.
+
+## Decisions (after T9)
+- **Model:** `moonshotai/kimi-k3` on OpenRouter ($0.72 in / $13 out per 1M tokens). Live check on synthetic bars: valid JSON every time, ~4.4 s, ~2.2k tokens in / ~180 out, **~$0.0033 per read** (about $0.25 a day for ~72 reads, against the $3 cap). No reasoning tokens are billed. Provider order is still empty; pin one once real days show which provider is stable.
+- **Prompt v2** (`prompts/market_read_v2.md`, now the configured version): v1 plus two explicit rules, because K3 first wrote a `reason` longer than 300 characters and once answered `watch` without a setup (both are rejected by the validator, correctly). v1 stays in the repo. With v2: 5 of 5 answers valid; 2 of them were then rejected by the price rules (reward/risk, stop distance), which is the validator doing its job.
+- **FTMO limits** (`initial_balance 80000`, daily loss 5 %, max loss 10 %, reset midnight Prague): confirmed by Lorant, no change.
+- **Server time:** to be determined from the real FTMO demo heartbeats (T10): run `scripts/check_server_time.py` once MT5 reports, and again between 25 Oct and 1 Nov 2026.
