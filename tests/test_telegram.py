@@ -269,3 +269,14 @@ def test_paused_alerts_are_muted_and_not_replayed(tg, settings):
     fake.calls.clear()
     svc.send_pending_reads(NOW)
     assert fake.sent() == []  # already claimed: not replayed after /resume
+
+
+def test_http_libraries_never_log_request_urls(caplog):
+    """httpx logs full URLs at INFO, and Telegram URLs contain the bot token."""
+    from app.main import setup_logging
+
+    setup_logging()
+    api = TelegramApi(TOKEN, httpx.MockTransport(FakeTelegram()))
+    with caplog.at_level(logging.INFO):
+        api.send_message(CHAT, "hello")
+    assert TOKEN not in caplog.text and "SECRET-TOKEN" not in caplog.text

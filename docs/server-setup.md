@@ -46,9 +46,9 @@ Snapshots are the main reason for the container: snapshot before every Wine or M
 ```bash
 # 24.04 on purpose: WineHQ packages and deploy/mt5/install.sh target noble, and the stack uses Python 3.12.
 incus launch images:ubuntu/24.04 trader
-incus config set trader limits.cpu 4 limits.memory 8GiB
-incus config set trader boot.autostart true
-incus config set trader snapshots.schedule "@daily" snapshots.expiry 14d snapshots.pattern "daily-%d"
+incus config set trader limits.cpu=4 limits.memory=8GiB
+incus config set trader boot.autostart=true
+incus config set trader snapshots.schedule=@daily snapshots.expiry=14d snapshots.pattern="daily-%d"
 incus exec trader -- bash -c 'apt update && apt full-upgrade -y && timedatectl set-timezone UTC || true'
 ```
 - No proxy devices, no inbound ports: nothing in the container is reachable from outside.

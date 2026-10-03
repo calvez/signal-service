@@ -23,6 +23,16 @@ from app.timeconv import server_to_utc
 log = logging.getLogger("signal")
 
 
+def setup_logging() -> None:
+    """Console logging for journald. The HTTP libraries stay at WARNING: at INFO httpx prints
+    every request URL, and Telegram URLs contain the bot token."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
 def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
@@ -34,6 +44,7 @@ def create_app(
 ) -> FastAPI:
     """`llm` can be injected (tests). Otherwise a client is built when an API key and a real
     model id are configured; without one the service still ingests but makes no reads."""
+    setup_logging()
     settings = settings or get_settings()
     if (
         llm is None
