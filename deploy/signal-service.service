@@ -1,0 +1,19 @@
+[Unit]
+Description=signal-service (MT5 bar ingest, LLM market read, Telegram bot). Phase 1: never trades.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=signal
+Group=signal
+WorkingDirectory=/opt/signal-service
+# Binds to 127.0.0.1 only. Settings: /opt/signal-service/.env (secrets, mode 600) and config.yaml.
+ExecStart=/opt/signal-service/.venv/bin/uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000 --no-access-log
+Restart=on-failure
+RestartSec=5
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
