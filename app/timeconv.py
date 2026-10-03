@@ -57,3 +57,8 @@ def utc_offset_sec(t_server: int, mode: str) -> int:
     """The server's UTC offset (server clock minus UTC) at that moment under the given mode.
     Compare with the `server_utc_offset_sec` the EA reports."""
     return t_server - server_to_utc(t_server, mode)
+
+
+def offset_matches(reported_offset_sec: int, t_server: int, mode: str) -> bool:
+    """Monitor check (every heartbeat): does the configured rule give the offset the EA reports?"""
+    return utc_offset_sec(t_server, mode) == reported_offset_sec

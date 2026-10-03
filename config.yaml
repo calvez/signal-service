@@ -9,8 +9,9 @@ symbols:
   US30.cash:  { name: Dow,    session: us, role: traded,  calendar: XNYS }
 
 sessions:
-  eu: { tz: Europe/Berlin,    start: "09:00", end: "11:00", brief_at: "08:45" }
-  us: { tz: America/New_York, start: "09:30", end: "11:30", brief_at: "09:15" }
+  # cash_close: when the cash market closes; the prior-close price for "gap" is taken there.
+  eu: { tz: Europe/Berlin,    start: "09:00", end: "11:00", brief_at: "08:45", cash_close: "17:30" }
+  us: { tz: America/New_York, start: "09:30", end: "11:30", brief_at: "09:15", cash_close: "16:00" }
 
 rules:
   max_trades_per_day: 3

@@ -41,6 +41,7 @@ class SessionCfg(_Strict):
     start: time
     end: time
     brief_at: time
+    cash_close: time
 
 
 class RulesCfg(_Strict):
