@@ -11,13 +11,14 @@ import logging
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from datetime import time as clock_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from app import charts, db, reports, sessions
+from app import charts, db, outcomes, reports, sessions
 from app.config import Settings
 from app.messages import alert_text, feedback_buttons, fmt_time
 from app.status import STALE_SEC, MonitorEngine, Out, in_quiet_hours
@@ -29,6 +30,8 @@ TICK_SEC = 5
 MONITOR_EVERY_SEC = 30
 WRAP_GRACE_SEC = 30 * 60  # still send the wrap this long after the session ended
 DAILY_GRACE_SEC = 2 * 3600
+OUTCOMES_EVERY_SEC = 60
+EXPORT_WEEKDAY, EXPORT_HOUR = 5, 10  # Saturday 10:00 Berlin: all outcomes are settled
 M5_SEC = 300
 TIMEFRAMES = {"M5": 300, "H1": 3600, "D1": 86400}
 
@@ -65,6 +68,7 @@ class TelegramService:
         self.engine = MonitorEngine(settings, self.started_at)
         self.bot = Bot(settings, api, self.commands())
         self._last_monitor = 0
+        self._last_outcomes = 0
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
 
@@ -249,6 +253,25 @@ class TelegramService:
         out += self._daily_report(conn, now)
         return out
 
+    def weekly_export(self, conn, now: int) -> tuple[str, bytes] | None:
+        """(filename, CSV bytes) of the past week's reads + feedback + outcomes, once a week."""
+        z = ZoneInfo(self.cfg.reports.tz)
+        local = datetime.fromtimestamp(now, tz=z)
+        if local.weekday() != EXPORT_WEEKDAY or local.hour != EXPORT_HOUR:
+            return None
+        year, week, _ = local.isocalendar()
+        if not db.kv_once(conn, f"export:{year}-W{week:02d}"):
+            return None
+        monday = datetime.combine(
+            (local - timedelta(days=local.weekday())).date(), clock_time(0), tzinfo=z
+        )
+        name = f"reads_{year}-W{week:02d}.csv"
+        folder = Path(self.s.db_path).resolve().parent / "exports"
+        folder.mkdir(parents=True, exist_ok=True)
+        outcomes.update_outcomes(conn, self.cfg, now)
+        outcomes.write_csv(conn, int(monday.timestamp()), now, folder / name)
+        return name, (folder / name).read_bytes()
+
     def _daily_report(self, conn, now: int) -> list[Out]:
         rep = self.cfg.reports
         z = ZoneInfo(rep.tz)
@@ -268,7 +291,11 @@ class TelegramService:
         self.send_pending_reads(now)
         conn = self._conn()
         try:
+            if now - self._last_outcomes >= OUTCOMES_EVERY_SEC:
+                self._last_outcomes = now
+                outcomes.update_outcomes(conn, self.cfg, now)
             msgs = self.due_messages(conn, now)
+            export = self.weekly_export(conn, now)
             if now - self._last_monitor >= MONITOR_EVERY_SEC:
                 self._last_monitor = now
                 msgs += self.engine.run(conn, now)
@@ -276,6 +303,10 @@ class TelegramService:
             conn.close()
         for m in msgs:
             self._send(m.text, m.silent)
+        if export:
+            self.api.send_document(
+                self.chat_id, export[0], export[1], "Weekly export (simulated outcomes)"
+            )
 
     def announce_start(self) -> None:
         conn = self._conn()

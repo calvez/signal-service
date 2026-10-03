@@ -68,6 +68,11 @@ class TelegramApi:
         res = self.call("sendPhoto", data, files={"photo": ("chart.png", png, "image/png")})
         return None if res is None else res["message_id"]
 
+    def send_document(self, chat_id, filename: str, content: bytes, caption="") -> int | None:
+        data = {"chat_id": chat_id, "caption": caption[:CAPTION_MAX], "disable_notification": True}
+        res = self.call("sendDocument", data, files={"document": (filename, content, "text/csv")})
+        return None if res is None else res["message_id"]
+
     def get_updates(self, offset: int | None, timeout: int = 25) -> list[dict] | None:
         data = {"timeout": timeout, "allowed_updates": json.dumps(["message", "callback_query"])}
         if offset is not None:

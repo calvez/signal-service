@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from app import db, features, htf, sessions
+from app import db, features, htf, outcomes, sessions
 from app.config import AppConfig, Settings
 from app.llm import utc_day_start
 from app.messages import fmt_time, money, short_name
@@ -76,6 +76,16 @@ def heartbeat_line(hb, now: int) -> str:
         return "no heartbeat yet"
     state = "connected" if hb["connected"] else "DISCONNECTED"
     return f"{state} · heartbeat {ago(now - hb['received_at'])} ago"
+
+
+def _outcome_lines(conn, start: int, end: int, symbols: list[str] | None = None) -> list[str]:
+    """Simulated results (see outcomes.py). Trades still open at the time count as pending."""
+    ai = outcomes.summarize(conn, start, end, symbols, "alert")
+    mine = outcomes.summarize(conn, start, end, symbols, "alert", only_taken=True)
+    lines = [outcomes.summary_line("AI alerts", ai)]
+    if mine["n"]:
+        lines.append(outcomes.summary_line("your 'take' picks", mine))
+    return lines
 
 
 # --------------------------------------------------------------------------- /status
@@ -258,7 +268,7 @@ def today_text(settings: Settings, conn, now: int) -> str:
             f"({r['action']}) → {r['choice'] or 'no answer'}"
         )
     lines.append(feedback_line(feedback_counts(conn, start, now + 1)))
-    lines.append("Hypothetical results: coming with the outcome simulator")
+    lines += _outcome_lines(conn, start, now + 1)
     lines.append(f"LLM spend {llm_line(settings, conn, now)}")
     return "\n".join(lines)
 
@@ -278,7 +288,7 @@ def wrap_text(settings: Settings, conn, session: str, start: int, end: int) -> s
             f"🏁 {session.upper()} session over · {len(rows)} reads · {n_alert} alert · "
             f"{n_watch} watch",
             feedback_line(fb),
-            "Hypothetical R so far: coming with the outcome simulator",
+            *_outcome_lines(conn, start, end + 600, symbols),
         ]
     )
 
@@ -299,7 +309,7 @@ def daily_report_text(settings: Settings, conn, now: int) -> str:
             f"Reads {s['reads']} · alerts {s['alert']} · watch {s['watch']} · "
             f"rejected/failed {s['rejected']}",
             feedback_line(fb),
-            "Hypothetical results: coming with the outcome simulator",
+            *_outcome_lines(conn, start, now + 1),
             f"LLM {llm['n']} calls · ${llm['cost']:.2f}",
         ]
     )

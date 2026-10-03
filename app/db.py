@@ -97,6 +97,16 @@ CREATE TABLE IF NOT EXISTS kv (
     updated_at INTEGER NOT NULL
 );
 
+-- Hypothetical outcome of every alert/watch (outcomes.py). NOT real trades.
+CREATE TABLE IF NOT EXISTS outcomes (
+    read_id    INTEGER PRIMARY KEY REFERENCES reads (id),
+    status     TEXT    NOT NULL,                 -- pending | no_entry | win | loss | expired
+    r          REAL,                             -- result in R (NULL for pending / no_entry)
+    entry_t    INTEGER,                          -- open time of the bar that triggered the entry
+    exit_t     INTEGER,
+    updated_at INTEGER NOT NULL
+);
+
 -- One row per evaluated bar: what the model said and what we made of it.
 CREATE TABLE IF NOT EXISTS reads (
     id             INTEGER PRIMARY KEY,
@@ -300,3 +310,18 @@ def add_feedback(conn: sqlite3.Connection, read_id: int, choice: str, ts_utc: in
 
 def latest_heartbeats(conn: sqlite3.Connection, n: int = 2) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM heartbeats ORDER BY id DESC LIMIT ?", (n,)).fetchall()
+
+
+def load_bars_between(
+    conn: sqlite3.Connection, symbol: str, tf: str, start_utc: int, end_utc: int
+) -> pd.DataFrame:
+    """Bars with start_utc <= open time < end_utc, oldest first (same shape as load_bars)."""
+    rows = conn.execute(
+        "SELECT t_utc, o, h, l, c, tv, sp FROM bars "
+        "WHERE symbol=? AND tf=? AND t_utc>=? AND t_utc<? ORDER BY t_utc",
+        (symbol, tf, start_utc, end_utc),
+    ).fetchall()
+    df = pd.DataFrame([tuple(r) for r in rows], columns=["t_utc", *"ohlc", "tv", "sp"])
+    df.index = pd.to_datetime(df.pop("t_utc"), unit="s", utc=True)
+    df.index.name = "t"
+    return df

@@ -70,3 +70,14 @@
 - **ASK 1:** confirm the FTMO limits in `config.yaml` against the account's objectives (`initial_balance: 80000`, daily loss 5 %, max loss 10 %, reset at midnight Prague). The warnings use these numbers.
 - **ASK 2:** `/screenshot` runs ImageMagick `import -display :99` as the service user. Inside the container the service will run as a different user than `mt5`, so the options are: run the service as `mt5`, or a narrow sudoers rule (`sudo -u mt5 import ...`). Which one? `/restart_mt5` (restart `mt5-terminal` after a confirm button) needs a sudoers rule too and is not built until you approve it.
 - Note: the service start message and monitors use the real clock; on this host without MT5 running, a started service will report "MT5 not reporting" after 10 minutes. That is expected until T10.
+
+## T9 — Outcomes and daily report (done)
+- `app/outcomes.py`: hypothetical outcome of every alert **and** watch, stored in `outcomes` and re-simulated until final. Rules (also in the module docstring):
+  - Entry is a stop order that must trigger within the next 3 M5 bars after the signal bar; otherwise `no_entry` (not counted in R). Fill = the entry price (no slippage or spread).
+  - Then stop or target, whichever the M5 high/low reaches first. A bar touching both counts as a **loss**, including the entry bar (if it triggers the entry and also reaches the stop, the order inside the bar is unknown, so it is a loss).
+  - win = +reward/risk, loss = −1 R. Still open at the cash close of that session day (`cash_close` in config): `expired`, marked to the last close. Not enough bars yet: `pending`.
+- Telegram: `/today`, the session wrap and the daily report now show "Simulated AI alerts: n → wins · losses · expired · no entry · pending · ±R", plus the same for the alerts he answered "I'd take it". The word "Simulated" is always there. The wrap at the end of the window shows mostly "pending" because trades run until the cash close; the 18:00 daily report settles the EU ones, the US ones settle after 22:00 Berlin.
+- The scheduler updates outcomes every 60 s.
+- Weekly CSV: Saturday 10:00 Berlin the bot sends `reads_<year>-W<week>.csv` (reads + his latest answer + simulated outcome; columns in `outcomes.CSV_COLUMNS`) and keeps a copy in `data/exports/`. Manual export: `uv run python scripts/export_csv.py --days 7 --out reads.csv`.
+- Tests: 196 in total. New: win/loss/same-bar/entry-bar cases for long and short, entry window edges (3rd bar counts, 4th does not), expiry and pending, bars outside the replay window ignored, database updates, summaries, CSV content, weekly job once per week.
+- Limits to keep in mind when reading the numbers: M5 high/low cannot show the order of events inside a bar (hence the conservative loss rule); there is no spread, slippage or commission; the 3-bar entry window and "hold until cash close" are my reading of the task and easy to change in `outcomes.py`.
