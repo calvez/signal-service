@@ -57,7 +57,7 @@ def test_success_is_logged_with_everything(settings):
     (row,) = rows(settings)
     assert row["status"] == "ok" and row["provider"] == "SomeProvider"
     assert row["model"] == settings.config.llm.model
-    assert row["prompt_version"] == "v1"
+    assert row["prompt_version"] == settings.config.llm.prompt_version
     assert "SYS" in row["prompt"] and "USER" in row["prompt"]
     assert json.loads(row["raw_response"])["usage"]["cost"] == 0.0123
     assert (row["tokens_in"], row["tokens_out"], row["cost_usd"]) == (1200, 80, 0.0123)
