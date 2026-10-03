@@ -1,0 +1,12 @@
+[Unit]
+Description=Virtual display :99 for MetaTrader 5
+After=network.target
+
+[Service]
+User=mt5
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1600x900x24 -nolisten tcp
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

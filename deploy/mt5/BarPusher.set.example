@@ -1,0 +1,9 @@
+ServerUrl=http://127.0.0.1:8000
+IngestToken=CHANGE-ME
+SymbolList=GER40.cash,UK100.cash,US100.cash,US30.cash
+BackfillM5=2000
+BackfillH1=500
+BackfillD1=250
+PollSeconds=5
+HeartbeatSec=60
+HttpTimeoutMs=5000

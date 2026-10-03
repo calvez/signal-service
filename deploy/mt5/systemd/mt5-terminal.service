@@ -1,0 +1,22 @@
+[Unit]
+Description=MetaTrader 5 terminal under Wine (headless, starts from startup.ini)
+Requires=mt5-xvfb.service mt5-wm.service
+After=mt5-wm.service network-online.target signal-service.service
+Wants=network-online.target
+
+[Service]
+User=mt5
+Environment=DISPLAY=:99
+Environment=WINEPREFIX=/home/mt5/.mt5
+Environment=WINEDEBUG=-all
+WorkingDirectory=/home/mt5/.mt5/drive_c/Program Files/MetaTrader 5
+# startup.ini logs in, enables WebRequest for the service URL and attaches BarPusher.
+ExecStart=/usr/bin/wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" "/config:C:\\Program Files\\MetaTrader 5\\config\\startup.ini"
+ExecStop=/usr/bin/wineserver -k
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=20
+
+[Install]
+WantedBy=multi-user.target

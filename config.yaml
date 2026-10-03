@@ -1,0 +1,66 @@
+# Copy to config.yaml. Secrets go in .env, never here.
+
+server_time_mode: "ny_plus_7"     # confirm in task T2: ny_plus_7 | iana:<Zone> | fixed:<seconds>
+
+symbols:
+  GER40.cash: { name: DAX,    session: eu, role: traded,  calendar: XETR }
+  UK100.cash: { name: FTSE,   session: eu, role: context, calendar: XLON }
+  US100.cash: { name: Nasdaq, session: us, role: traded,  calendar: XNYS }
+  US30.cash:  { name: Dow,    session: us, role: traded,  calendar: XNYS }
+
+sessions:
+  eu: { tz: Europe/Berlin,    start: "09:00", end: "11:00", brief_at: "08:45" }
+  us: { tz: America/New_York, start: "09:30", end: "11:30", brief_at: "09:15" }
+
+rules:
+  max_trades_per_day: 3
+  cooldown_after_win_min: 30
+  htf_neutral_counts_as_conflict: true
+  min_reward_risk: 1.0
+  stop_atr_min: 0.3
+  stop_atr_max: 3.0
+  entry_max_atr_from_close: 1.0
+  push_grades: [A]               # B reads are logged; set [A, B] to push both
+
+features:
+  ema_period: 20
+  atr_period: 14
+  swing_confirm_bars: 2
+  opening_range_bars: 6
+  prompt_bars: 36
+
+llm:
+  # Benchmark 2-3 models on the same logged days before settling.
+  model: "SET-ME"               # an OpenRouter model id
+  provider_order: []            # pin providers so behaviour doesn't drift
+  allow_fallbacks: false
+  temperature: 0
+  timeout_sec: 30
+  daily_budget_usd: 3.00
+  prompt_version: "v1"
+
+# High-impact events, entered by hand for now. Times in the event's own zone.
+news:
+  - { at: "2026-10-06T08:30", tz: America/New_York, name: "example — replace" }
+news_window_min: 2
+
+telegram:
+  display_tz: Europe/Budapest
+  quiet_hours: { start: "22:00", end: "07:00" }   # ops alerts silent unless positions are open
+  chart: { bars: 60, width: 1080, height: 1350 }
+
+reports:
+  daily_at: "18:00"               # Europe/Berlin
+  tz: Europe/Berlin
+
+ftmo:                               # confirm against your account's objectives
+  initial_balance: 80000
+  daily_loss_pct: 5
+  max_loss_pct: 10
+  day_reset_tz: Europe/Prague       # daily limit resets at midnight CE(S)T
+  warn_levels_pct: [50, 80]
+
+monitors:
+  heartbeat_timeout_session_sec: 180
+  heartbeat_timeout_other_sec: 600
+  disk_min_free_pct: 10

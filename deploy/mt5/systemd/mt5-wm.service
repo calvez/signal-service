@@ -1,0 +1,15 @@
+[Unit]
+Description=Openbox window manager on :99 (MT5 dialogs need one)
+Requires=mt5-xvfb.service
+After=mt5-xvfb.service
+
+[Service]
+User=mt5
+Environment=DISPLAY=:99
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/openbox
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

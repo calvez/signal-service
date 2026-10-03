@@ -1,0 +1,10 @@
+[Unit]
+Description=Run signal-backup nightly (after the US session, before the EU open)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

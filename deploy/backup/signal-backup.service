@@ -1,0 +1,6 @@
+[Unit]
+Description=Nightly restic backup of the signal-service database
+
+[Service]
+Type=oneshot
+ExecStart=/root/signal-service/deploy/backup/backup.sh

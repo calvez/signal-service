@@ -1,0 +1,27 @@
+; MT5 start configuration. install.sh copies this to
+;   /home/mt5/.mt5/drive_c/Program Files/MetaTrader 5/config/startup.ini  (chmod 600)
+; Fill in Login/Password/Server. No comments on the same line as a value.
+
+[Common]
+Login=12345678
+Password=CHANGE-ME
+Server=FTMO-Demo
+KeepPrivate=1
+NewsEnable=0
+CertInstall=0
+
+[Experts]
+; EAs only run with AllowLiveTrading on. BarPusher contains no order code.
+AllowLiveTrading=1
+AllowDllImport=0
+Enabled=1
+Account=0
+Profile=0
+WebRequest=1
+WebRequestUrl=http://127.0.0.1:8000
+
+[StartUp]
+Expert=BarPusher
+ExpertParameters=BarPusher.set
+Symbol=GER40.cash
+Period=M5
