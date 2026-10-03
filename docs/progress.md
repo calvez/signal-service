@@ -93,3 +93,17 @@
 - `CLAUDE.md` still says "€80k account" in its first section. It is read-only for me, so Lorant should edit that line.
 - The profit target and the minimum trading days are not tracked in phase 1.
 - The free-trial demo account that MT5 will log into may show a different balance. The first heartbeat shows it, and the risk percentages are always computed against `initial_balance`, so compare the two then.
+
+## T10 — Deploy (in progress)
+Done on the host (with Lorant's go-ahead, 2026-10-03/04):
+- Host hardening (`docs/server-setup.md` §2): packages updated, timezone UTC, SSH keys only (`/etc/ssh/sshd_config.d/10-signal-hardening.conf`; the host was being brute-forced with passwords, all of Lorant's logins were key-based), `ufw` active with only OpenSSH allowed in, plus the Incus bridge rules. chrony synced.
+- Incus 6.0.5 with a btrfs loop pool (200 GiB) and a NAT bridge `incusbr0` (no IPv6, nothing exposed over the network). Container `trader` (Ubuntu 24.04.5, Python 3.12.3): 4 CPUs, 8 GiB, autostart, daily snapshots kept 14 days. Snapshot `after-service-deploy` taken.
+- The `incus config set` lines in `docs/server-setup.md` §4 used a syntax Incus 6 rejects; fixed to `key=value`.
+Done in the container:
+- Service deployed to `/opt/signal-service` as the unprivileged user `signal` (`deploy/deploy.sh`, unit `deploy/signal-service.service`), listening on 127.0.0.1:8000 only. `.env` there has a new random `INGEST_TOKEN` (the same value must go into `BarPusher.set`), mode 600. All 198 tests pass inside the container. Telegram polling from the container works (it answered Lorant's earlier commands).
+- Backup files now point at `/opt/signal-service`.
+- Logging: console logging for journald, with `httpx`/`httpcore` at WARNING because their INFO lines contain the Telegram bot token in the URL (test added).
+Findings worth knowing:
+- `rsync` hangs on exit inside the container on this host (files are copied, the processes never end, and cannot be killed from another `incus exec` session because AppArmor blocks signals between the container profile and exec-spawned processes). `deploy.sh` uses `tar` instead. Restarting the container clears such processes.
+- A manual snapshot gets the 14-day expiry too; set `incus snapshot create trader <name> --expiry ...` or edit it if one should be kept longer.
+Still to do: MT5 install (**ASK**), end-to-end check, restic backups (**ASK** Storage Box), reboot test, §7 checklist.
