@@ -16,6 +16,8 @@ from app.config import Settings, get_settings
 from app.llm import LlmClient
 from app.models import BarsPayload, HeartbeatPayload
 from app.reader import run_read
+from app.scheduler import TelegramService
+from app.telegram import TelegramApi
 from app.timeconv import server_to_utc
 
 log = logging.getLogger("signal")
@@ -25,7 +27,11 @@ def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
-def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    llm: LlmClient | None = None,
+    telegram: TelegramService | None = None,
+) -> FastAPI:
     """`llm` can be injected (tests). Otherwise a client is built when an API key and a real
     model id are configured; without one the service still ingests but makes no reads."""
     settings = settings or get_settings()
@@ -35,6 +41,9 @@ def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -
         and settings.config.llm.model != "SET-ME"
     ):
         llm = LlmClient(settings)
+    sec = settings.secrets
+    if telegram is None and sec.telegram_bot_token and sec.telegram_chat_id:
+        telegram = TelegramService(settings, TelegramApi(sec.telegram_bot_token))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -46,7 +55,11 @@ def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -
             db.log_event(conn, "service_start")
         finally:
             conn.close()
+        if telegram is not None:
+            telegram.start()
         yield
+        if telegram is not None:
+            telegram.stop()
 
     app = FastAPI(title="signal-service", lifespan=lifespan)
 

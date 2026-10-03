@@ -81,6 +81,22 @@ CREATE TABLE IF NOT EXISTS symbol_meta (
     updated_at INTEGER NOT NULL
 );
 
+-- Lorant's own call on an alert/watch (Telegram buttons). Several rows per read are allowed;
+-- the latest one counts.
+CREATE TABLE IF NOT EXISTS feedback (
+    id      INTEGER PRIMARY KEY,
+    read_id INTEGER NOT NULL REFERENCES reads (id),
+    choice  TEXT    NOT NULL,                    -- take | skip | unsure
+    ts_utc  INTEGER NOT NULL
+);
+
+-- Small key/value store: Telegram offset, pause state, once-only markers, monitor state.
+CREATE TABLE IF NOT EXISTS kv (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 -- One row per evaluated bar: what the model said and what we made of it.
 CREATE TABLE IF NOT EXISTS reads (
     id             INTEGER PRIMARY KEY,
@@ -241,3 +257,46 @@ def read_exists(conn: sqlite3.Connection, symbol: str, bar_time_utc: int) -> boo
         "SELECT 1 FROM reads WHERE symbol = ? AND bar_time_utc = ?", (symbol, bar_time_utc)
     ).fetchone()
     return row is not None
+
+
+# ------------------------------------------------------------------ key/value, feedback
+def kv_get(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    return None if row is None else row["value"]
+
+
+def kv_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO kv (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (key, value, int(time.time())),
+        )
+
+
+def kv_delete(conn: sqlite3.Connection, key: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+
+
+def kv_once(conn: sqlite3.Connection, key: str, value: str = "1") -> bool:
+    """True the first time a key is claimed, False afterwards (atomic): 'send this only once'."""
+    with conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO kv (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, int(time.time())),
+        )
+    return cur.rowcount == 1
+
+
+def add_feedback(conn: sqlite3.Connection, read_id: int, choice: str, ts_utc: int) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO feedback (read_id, choice, ts_utc) VALUES (?, ?, ?)",
+            (read_id, choice, ts_utc),
+        )
+
+
+def latest_heartbeats(conn: sqlite3.Connection, n: int = 2) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM heartbeats ORDER BY id DESC LIMIT ?", (n,)).fetchall()
