@@ -12,13 +12,13 @@ CertInstall=0
 
 [Experts]
 ; EAs only run with AllowLiveTrading on. BarPusher contains no order code.
+; The WebRequest allow-list cannot be set here: MT5 stores it encrypted and only takes it from
+; Tools > Options > Expert Advisors (see docs/mt5-linux.md, "One-time GUI settings").
 AllowLiveTrading=1
 AllowDllImport=0
 Enabled=1
 Account=0
 Profile=0
-WebRequest=1
-WebRequestUrl=http://127.0.0.1:8000
 
 [StartUp]
 Expert=BarPusher

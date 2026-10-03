@@ -66,8 +66,10 @@ install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/MQL5" "$MT5_DIR/MQL5/Experts"
 install -o "$MT5_USER" -g "$MT5_USER" -m 644 "$REPO/mt5/BarPusher.mq5" "$MT5_DIR/MQL5/Experts/BarPusher.mq5"
 install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/BarPusher.set" "$MT5_DIR/MQL5/Presets/BarPusher.set"
 install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/startup.ini"   "$MT5_DIR/config/startup.ini"
-# Compile headless; MetaEditor writes a log next to the source.
-as_mt5 wine "$MT5_DIR/MetaEditor64.exe" /compile:"C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\BarPusher.mq5" /log || true
+# Compile headless; MetaEditor writes a log next to the source. It only works with /portable
+# (data folder = the install folder, not AppData), run from the MT5 folder with a RELATIVE path:
+# an absolute path with spaces makes MetaEditor exit silently.
+(cd "$MT5_DIR" && as_mt5 wine MetaEditor64.exe /portable '/compile:MQL5\Experts\BarPusher.mq5' /log) || true
 LOG="$MT5_DIR/MQL5/Experts/BarPusher.log"
 if [ -f "$MT5_DIR/MQL5/Experts/BarPusher.ex5" ]; then
   echo "BarPusher compiled."

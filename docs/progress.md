@@ -107,3 +107,15 @@ Findings worth knowing:
 - `rsync` hangs on exit inside the container on this host (files are copied, the processes never end, and cannot be killed from another `incus exec` session because AppArmor blocks signals between the container profile and exec-spawned processes). `deploy.sh` uses `tar` instead. Restarting the container clears such processes.
 - A manual snapshot gets the 14-day expiry too; set `incus snapshot create trader <name> --expiry ...` or edit it if one should be kept longer.
 Still to do: MT5 install (**ASK**), end-to-end check, restic backups (**ASK** Storage Box), reboot test, §7 checklist.
+
+### MT5 install (2026-10-03/04) — what it took
+- **Wine 10.0, not 11:** with Wine 11 the MT5 installer stops with "A debugger has been found running in your system" (MetaQuotes anti-debug; known Wine 11 issue). `install.sh` pins `winehq-stable=10.0.0.0~noble-1`.
+- **Mono/Gecko prompts** block `wineboot` on a display nobody watches: `WINEDLLOVERRIDES=mscoree,mshtml=`.
+- **AppArmor on this host** (kernel 7.0) blocked signals between processes inside the container, so systemd could not stop Wine processes. Fix: `incus config set trader raw.apparmor='signal (send) peer="incus-trader_**",'` (signals only within this container). Added to `docs/server-setup.md`-worthy notes; restart the container after setting it.
+- **`/portable`** for terminal and MetaEditor (otherwise MT5 uses AppData and ignores the files `install.sh` places), **relative paths** in `/config:` and `/compile:` (Wine quotes paths with spaces and MT5 keeps the closing quote).
+- **FTMO servers:** the generic MetaQuotes installer does not know `FTMO-Demo`. FTMO's own installer (`https://download.mql5.com/cdn/web/ftmo.global.markets/mt5/ftmo5setup.exe`, linked from ftmo.com) ships `Config/servers.dat`; copied into our install. Login works: "authorized on FTMO-Demo", account "€160k FTMO Free Trial 2-Step", 166 symbols.
+- **Config folder:** the installer creates `Config`, the old script created `config` (Linux is case-sensitive); merged into `Config`.
+- **Graceful stop:** `ExecStop` now closes MT5 with `taskkill` (no `/f`) before `wineserver -w`, so MT5 saves settings and profile.
+- **MT5 build 6235 starts an MCP server** (Tools > Options > MCP, "Enable internal server", 127.0.0.1:22346) through which AI tools could control the terminal, including trading. Disabled, because phase 1 must have no path to execution.
+- **Data:** first heartbeat and the full backfill arrived (4 symbols × 2000 M5 / 500 H1 / 250 D1 bars). Server offset +3 h; matches `ny_plus_7` (and Athens/Nicosia until the Oct 25 – Nov 1 check).
+- **OPEN — WebRequest allow-list:** MT5 only accepts it from Tools > Options (stored encrypted), and every start with `/config` resets all Expert options to the start-config values. So the EA's HTTP calls are blocked after each restart. Decision needed (see chat).

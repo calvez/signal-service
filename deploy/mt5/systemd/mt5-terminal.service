@@ -12,8 +12,14 @@ Environment=WINEDEBUG=-all
 Environment="WINEDLLOVERRIDES=mscoree,mshtml="
 WorkingDirectory=/home/mt5/.mt5/drive_c/Program Files/MetaTrader 5
 # startup.ini logs in, enables WebRequest for the service URL and attaches BarPusher.
-ExecStart=/usr/bin/wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" "/config:C:\\Program Files\\MetaTrader 5\\config\\startup.ini"
-ExecStop=/usr/bin/wineserver -k
+# /portable: the data folder (config, MQL5\Experts, MQL5\Presets, logs) is this install folder,
+# which is where install.sh puts everything. Without it MT5 uses AppData and finds none of it.
+# Relative paths on purpose (WorkingDirectory is the MT5 folder): Wine quotes arguments that
+# contain spaces and MT5 then reads the closing quote as part of the /config: path.
+ExecStart=/usr/bin/wine terminal64.exe /portable /config:Config\\startup.ini
+# Close MT5 normally first (it saves settings, profile and history on exit), then wait for Wine.
+# A hard kill loses e.g. the WebRequest allow-list entered under Tools > Options.
+ExecStop=/bin/sh -c '/usr/bin/wine taskkill /im terminal64.exe; /usr/bin/wineserver -w'
 KillMode=control-group
 TimeoutStopSec=30
 Restart=on-failure
