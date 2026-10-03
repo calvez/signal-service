@@ -10,6 +10,8 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
+import pandas as pd
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bars (
     symbol      TEXT    NOT NULL,
@@ -103,3 +105,21 @@ def log_event(conn: sqlite3.Connection, kind: str, detail: dict | None = None) -
             "INSERT INTO events (ts_utc, kind, detail) VALUES (?, ?, ?)",
             (int(time.time()), kind, json.dumps(detail or {}, ensure_ascii=False)),
         )
+
+
+def load_bars(
+    conn: sqlite3.Connection, symbol: str, tf: str, until_utc: int | None = None, limit: int = 2000
+) -> pd.DataFrame:
+    """The most recent `limit` bars (open time <= until_utc), oldest first.
+
+    Index: tz-aware UTC DatetimeIndex of the bar OPEN time. Columns: o h l c tv sp.
+    """
+    rows = conn.execute(
+        "SELECT t_utc, o, h, l, c, tv, sp FROM bars WHERE symbol=? AND tf=? AND t_utc<=? "
+        "ORDER BY t_utc DESC LIMIT ?",
+        (symbol, tf, until_utc if until_utc is not None else 2**62, limit),
+    ).fetchall()
+    df = pd.DataFrame([tuple(r) for r in rows][::-1], columns=["t_utc", *"ohlc", "tv", "sp"])
+    df.index = pd.to_datetime(df.pop("t_utc"), unit="s", utc=True)
+    df.index.name = "t"
+    return df
