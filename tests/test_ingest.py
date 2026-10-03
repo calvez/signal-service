@@ -109,3 +109,29 @@ def test_malformed_heartbeat_422(client, settings):
     del body["balance"]
     assert client.post("/v1/heartbeat", json=body, headers=AUTH).status_code == 422
     assert count(settings, "heartbeats") == 0
+
+
+def test_symbol_digits_are_remembered(client, settings):
+    client.post("/v1/bars", json=bars_payload(digits=2), headers=AUTH)
+    conn = sqlite3.connect(settings.db_path)
+    assert conn.execute("SELECT digits FROM symbol_meta WHERE symbol='GER40.cash'").fetchone() == (
+        2,
+    )
+
+
+def test_ingest_triggers_a_read_only_for_traded_m5(settings):
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from app.llm import LlmClient
+    from app.main import create_app
+
+    calls = []
+    llm = LlmClient(settings, httpx.MockTransport(lambda r: calls.append(r) or httpx.Response(500)))
+    settings.secrets.openrouter_api_key = "k"
+    with TestClient(create_app(settings, llm)) as c:
+        c.post("/v1/bars", json=bars_payload(timeframe="H1"), headers=AUTH)
+        c.post("/v1/bars", json=bars_payload(symbol="UK100.cash"), headers=AUTH)
+        assert calls == []  # H1 and a context-only symbol never trigger a read
+        c.post("/v1/bars", json=bars_payload(), headers=AUTH)  # old bar -> skipped as outside/stale
+    assert calls == []

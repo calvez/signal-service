@@ -73,6 +73,39 @@ CREATE TABLE IF NOT EXISTS llm_calls (
     cost_usd       REAL
 );
 CREATE INDEX IF NOT EXISTS llm_calls_ts ON llm_calls (ts_utc);
+
+-- Per-symbol facts the EA reports with every bars payload.
+CREATE TABLE IF NOT EXISTS symbol_meta (
+    symbol     TEXT PRIMARY KEY,
+    digits     INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- One row per evaluated bar: what the model said and what we made of it.
+CREATE TABLE IF NOT EXISTS reads (
+    id             INTEGER PRIMARY KEY,
+    ts_utc         INTEGER NOT NULL,
+    symbol         TEXT    NOT NULL,
+    bar_time_utc   INTEGER NOT NULL,             -- open time of the evaluated M5 bar
+    session        TEXT    NOT NULL,
+    llm_call_id    INTEGER REFERENCES llm_calls (id),
+    model          TEXT    NOT NULL,
+    prompt_version TEXT    NOT NULL,
+    htf_alignment  TEXT    NOT NULL,             -- computed by code
+    day_type_hint  TEXT    NOT NULL,             -- computed by code
+    atr            REAL,
+    last_close     REAL,
+    model_action   TEXT,                         -- what the model asked for
+    action         TEXT    NOT NULL,             -- final: none | watch | alert
+    push           INTEGER NOT NULL DEFAULT 0,
+    grade          TEXT,
+    setup          TEXT,                         -- JSON, prices rounded
+    context        TEXT,                         -- JSON from the model
+    reason         TEXT,
+    validation     TEXT    NOT NULL,
+    notified_at    INTEGER,                      -- set by the Telegram sender (T8)
+    UNIQUE (symbol, bar_time_utc)
+);
 """
 
 UPSERT_BAR = """
@@ -176,5 +209,35 @@ def llm_spend_since(conn: sqlite3.Connection, since_utc: int) -> float:
 def event_exists_since(conn: sqlite3.Connection, kind: str, since_utc: int) -> bool:
     row = conn.execute(
         "SELECT 1 FROM events WHERE kind = ? AND ts_utc >= ? LIMIT 1", (kind, since_utc)
+    ).fetchone()
+    return row is not None
+
+
+def upsert_symbol_meta(conn: sqlite3.Connection, symbol: str, digits: int) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO symbol_meta (symbol, digits, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT (symbol) DO UPDATE SET digits = excluded.digits, "
+            "updated_at = excluded.updated_at",
+            (symbol, digits, int(time.time())),
+        )
+
+
+def get_digits(conn: sqlite3.Connection, symbol: str) -> int | None:
+    row = conn.execute("SELECT digits FROM symbol_meta WHERE symbol = ?", (symbol,)).fetchone()
+    return None if row is None else int(row["digits"])
+
+
+def insert_read(conn: sqlite3.Connection, row: dict) -> int:
+    cols = ", ".join(row)
+    params = ", ".join(f":{k}" for k in row)
+    with conn:
+        cur = conn.execute(f"INSERT INTO reads ({cols}) VALUES ({params})", row)
+    return int(cur.lastrowid)
+
+
+def read_exists(conn: sqlite3.Connection, symbol: str, bar_time_utc: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM reads WHERE symbol = ? AND bar_time_utc = ?", (symbol, bar_time_utc)
     ).fetchone()
     return row is not None

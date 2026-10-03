@@ -36,3 +36,23 @@
 - `app/htf.py`: `htf_state` per timeframe from three votes (EMA20 slope, price vs. EMA, last two confirmed swings), `alignment` → `aligned_bull | aligned_bear | conflict`. Neutral counts as conflict by default (`rules.htf_neutral_counts_as_conflict`). Only bars that have **closed** by `asof` are used.
 - Slope and swing comparisons use a tolerance of 0.15 × ATR so sideways noise is not read as a trend (found by a test on perfectly flat data).
 - `db.load_bars()` returns a DataFrame for the features (tested).
+
+## T6 — LLM client (done)
+- `app/llm.py`: OpenRouter chat completions via httpx. Model, provider order and `allow_fallbacks` from `config.yaml`; temperature 0; `response_format: json_object`; `provider.require_parameters` so only providers that honour it are used; 30 s timeout; one retry on network errors only (never on an HTTP status).
+- Every call that reaches the network is stored in `llm_calls` (prompt version, full prompt, raw response, provider, latency, tokens, cost); the reader fills `parsed` and `validation` on the same row. The API key only travels in the Authorization header and is verified absent from the DB in a test.
+- Budget guard: daily cap in USD per **UTC day**, based on the cost OpenRouter reports (`usage.include`). Once reached: no more calls, and one `llm_budget_exceeded` event per day (T8 turns it into the Telegram alert).
+- Verified live with `google/gemini-2.5-flash-lite` (valid JSON, provider and cost logged, ~$0.0003 per read at ~2.8k tokens in). The OpenRouter key is in `.env` (git-ignored, mode 600); it has a $30 limit.
+
+## T7 — Market read (done)
+- `app/validate.py` implements all ten rules of `docs/protocol.md` §4. Any failure forces `action = none` and the reason is stored. Notes on the exact behaviour:
+  - A `reason` longer than 300 characters counts as a schema failure (as specified, no truncation).
+  - Rule 8 is implemented literally: counter-trend needs `trading_range` and price in the top **or** bottom 20%, regardless of direction. A counter-trend *long* at the top of the range would pass; consider making the edge direction-aware.
+  - Grade B or a counter-trend alert becomes a silent `watch` (not skipped).
+  - H1/D1 conflict is also enforced here, although the reader already skips those bars.
+- `app/reader.py`: runs for each new closed M5 bar of a traded symbol. Skips without calling the LLM when: not a traded symbol, outside the session window, data older than two bar periods (bar close + 600 s), already read, budget exceeded, digits unknown, bar/history missing, H1/D1 conflict. Skips are logged; the routine ones (not traded, outside session) only to the console to keep `events` small.
+- Any exception inside a read is caught, logged as `read_crashed`, and results in no alert.
+- Stored in `reads`: one row per evaluated bar (UNIQUE per symbol and bar), including the final action, push flag, setup, model and validation text. An LLM error is stored as `action none`. `notified_at` is for the Telegram sender (T8).
+- Wiring: `POST /v1/bars` starts a background read for the newest bar of an M5 batch of a traded symbol. Without an API key or with the placeholder model `SET-ME` the service still ingests but makes no reads.
+- New table `symbol_meta` (digits per symbol, from the bars payload) for price rounding and tick size. Tick size is currently 10^-digits; FTMO's real tick size may be larger.
+- Tests (139 total): each validation rule, prompt rendering without holes, **no future bar in the prompt**, every skip rule, garbage / error / bad-price answers never alert.
+- **Open:** pick the model. Candidates priced per 1M tokens in/out: `google/gemini-3.5-flash` ($1.50/$9), `openai/gpt-5.4-mini` ($0.75/$4.50), `anthropic/claude-sonnet-5.5` ($2/$10), `google/gemini-2.5-flash-lite` ($0.10/$0.40). At ~72 reads a day with ~3k tokens each, even the dearest is under $1 a day. `config.yaml` still has `model: "SET-ME"`.

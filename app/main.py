@@ -9,11 +9,13 @@ import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 
 from app import db
 from app.config import Settings, get_settings
+from app.llm import LlmClient
 from app.models import BarsPayload, HeartbeatPayload
+from app.reader import run_read
 from app.timeconv import server_to_utc
 
 log = logging.getLogger("signal")
@@ -23,8 +25,16 @@ def _iso(epoch: int | None) -> str | None:
     return None if epoch is None else datetime.fromtimestamp(epoch, tz=UTC).isoformat()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, llm: LlmClient | None = None) -> FastAPI:
+    """`llm` can be injected (tests). Otherwise a client is built when an API key and a real
+    model id are configured; without one the service still ingests but makes no reads."""
     settings = settings or get_settings()
+    if (
+        llm is None
+        and settings.secrets.openrouter_api_key
+        and settings.config.llm.model != "SET-ME"
+    ):
+        llm = LlmClient(settings)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -66,7 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True, "last_bar_utc": last_bar, "last_heartbeat_utc": _iso(hb)}
 
     @app.post("/v1/bars", dependencies=[Depends(require_token)])
-    def post_bars(payload: BarsPayload) -> dict:
+    def post_bars(payload: BarsPayload, background: BackgroundTasks) -> dict:
         if payload.symbol not in settings.config.symbols:
             raise HTTPException(status_code=422, detail=f"unknown symbol {payload.symbol!r}")
         mode = settings.config.server_time_mode
@@ -90,8 +100,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         conn = db.connect(settings.db_path)
         try:
             accepted = db.upsert_bars(conn, rows)
+            db.upsert_symbol_meta(conn, payload.symbol, payload.digits)
         finally:
             conn.close()
+        sym = settings.config.symbols[payload.symbol]
+        if llm is not None and payload.timeframe == "M5" and sym.role == "traded":
+            # Only the newest bar of the batch can be fresh; a backfill is skipped as stale.
+            background.add_task(
+                run_read, settings, llm, payload.symbol, max(r["t_utc"] for r in rows)
+            )
         return {"accepted": accepted}
 
     @app.post("/v1/heartbeat", dependencies=[Depends(require_token)])
