@@ -1,0 +1,7 @@
+# Installed to /etc/sudoers.d/signal-mt5 by deploy.sh (mode 440). The service user "signal" may
+# run exactly these two commands and nothing else:
+#  - take a picture of the MT5 virtual screen, as the mt5 user (read-only, /screenshot)
+#  - restart the MT5 service after a confirm button in Telegram (/restart_mt5)
+# It gets no way to click or type in MT5, and cannot read the FTMO login (mt5's startup.ini).
+signal ALL=(mt5) NOPASSWD: /usr/bin/import -display \:99 -window root png\:-
+signal ALL=(root) NOPASSWD: /usr/bin/systemctl restart mt5-terminal

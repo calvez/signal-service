@@ -128,10 +128,93 @@ def test_chart_command_needs_known_symbol(tg):
     assert texts[2].startswith("Timeframe") and texts[3].startswith("No M5 bars")
 
 
-def test_restart_mt5_is_not_enabled(tg):
+def restart_callback(ts_value, chat=CHAT):
+    return {"update_id": 6, "callback_query": {"id": "cb9", "data": f"rm:{ts_value}",
+            "message": {"message_id": 78, "chat": {"id": int(chat)}}}}  # fmt: skip
+
+
+def test_restart_mt5_asks_for_confirmation_first(tg, monkeypatch):
     svc, fake = tg
+    ran = []
+    monkeypatch.setattr("app.scheduler.restart_mt5", lambda: ran.append(1) or (True, "restarted"))
     svc.bot.handle_update(msg("/restart_mt5"))
-    assert "not enabled" in fake.sent()[0]["text"]
+    sent = fake.sent()[0]
+    assert "Restart the MT5 terminal?" in sent["text"] and "rm:" in sent["reply_markup"]
+    assert ran == []  # nothing happens until the button is pressed
+
+
+def test_restart_button_works_once_logs_and_expires(tg, settings, monkeypatch):
+    import time as _t
+
+    svc, fake = tg
+    ran = []
+    monkeypatch.setattr("app.scheduler.restart_mt5", lambda: ran.append(1) or (True, "restarted"))
+    svc.bot.handle_update(restart_callback(int(_t.time())))
+    assert ran == [1] and fake.sent("answerCallbackQuery")[-1]["text"] == "MT5 restarted."
+    assert json.loads(fake.sent("editMessageReplyMarkup")[-1]["reply_markup"]) == {
+        "inline_keyboard": []
+    }
+    assert json.loads(events(settings, "restart_mt5")[0][0]) == {"ok": True, "result": "restarted"}
+    svc.bot.handle_update(restart_callback(int(_t.time()) - 500))  # old button
+    svc.bot.handle_update(restart_callback("abc"))
+    assert ran == [1]
+    assert "expired" in fake.sent("answerCallbackQuery")[-1]["text"]
+
+
+def test_restart_button_from_another_chat_does_nothing(tg, monkeypatch):
+    import time as _t
+
+    svc, fake = tg
+    ran = []
+    monkeypatch.setattr("app.scheduler.restart_mt5", lambda: ran.append(1) or (True, "x"))
+    svc.bot.handle_update(restart_callback(int(_t.time()), chat="999"))
+    assert ran == [] and fake.calls == []
+
+
+def test_restart_failure_is_reported(tg, monkeypatch):
+    import time as _t
+
+    svc, fake = tg
+    monkeypatch.setattr(
+        "app.scheduler.restart_mt5", lambda: (False, "sudo: a password is required")
+    )
+    svc.bot.handle_update(restart_callback(int(_t.time())))
+    assert fake.sent("answerCallbackQuery")[-1]["text"].startswith("Restart failed: sudo")
+
+
+def test_privileged_commands_are_exactly_the_sudoers_ones():
+    from app import telegram
+
+    rules = open("deploy/sudoers/signal-mt5").read()
+    # sudo -n -u mt5 <argv...>  ->  "signal ALL=(mt5) NOPASSWD: <argv...>" with ':' escaped
+    argv = " ".join(telegram.SCREENSHOT_CMD[4:]).replace(":", "\\:")
+    assert f"signal ALL=(mt5) NOPASSWD: {argv}\n" in rules
+    restart = " ".join(telegram.RESTART_CMD[2:])  # sudo -n <argv...>
+    assert f"signal ALL=(root) NOPASSWD: {restart}\n" in rules
+    assert len([ln for ln in rules.splitlines() if ln.startswith("signal ")]) == 2
+
+
+def test_screenshot_helper(monkeypatch):
+    import subprocess
+
+    from app import telegram
+
+    def fake_run(cmd, **kw):
+        assert cmd == telegram.SCREENSHOT_CMD
+        return subprocess.CompletedProcess(cmd, 0, stdout=b"\x89PNG\r\n....", stderr=b"")
+
+    monkeypatch.setattr(telegram.subprocess, "run", fake_run)
+    assert telegram.take_screenshot().startswith(b"\x89PNG")
+    monkeypatch.setattr(
+        telegram.subprocess, "run", lambda c, **k: subprocess.CompletedProcess(c, 1, b"", b"err")
+    )
+    assert telegram.take_screenshot() is None
+    monkeypatch.setattr(
+        telegram.subprocess,
+        "run",
+        lambda c, **k: subprocess.CompletedProcess(c, 0, b"not a png", b""),
+    )
+    assert telegram.take_screenshot() is None
 
 
 # ------------------------------------------------------------------ polling

@@ -22,7 +22,7 @@ from app import charts, db, outcomes, reports, sessions
 from app.config import Settings
 from app.messages import alert_text, feedback_buttons, fmt_time
 from app.status import STALE_SEC, MonitorEngine, Out, in_quiet_hours
-from app.telegram import Bot, Reply, TelegramApi, take_screenshot
+from app.telegram import Bot, Reply, TelegramApi, restart_mt5, take_screenshot
 
 log = logging.getLogger("signal.scheduler")
 
@@ -66,7 +66,7 @@ class TelegramService:
         self.chat_id = settings.secrets.telegram_chat_id
         self.started_at = int(time.time()) if started_at is None else started_at
         self.engine = MonitorEngine(settings, self.started_at)
-        self.bot = Bot(settings, api, self.commands())
+        self.bot = Bot(settings, api, self.commands(), {"rm": self.cb_restart})
         self._last_monitor = 0
         self._last_outcomes = 0
         self._stop = threading.Event()
@@ -98,10 +98,7 @@ class TelegramService:
             "/screenshot": self.cmd_screenshot,
             "/pause": self.cmd_pause,
             "/resume": self.cmd_resume,
-            "/restart_mt5": lambda a: Reply(
-                "/restart_mt5 is not enabled yet. It needs a narrow sudoers rule that Lorant "
-                "has to approve first."
-            ),
+            "/restart_mt5": self.cmd_restart,
         }
 
     def cmd_status(self, args) -> Reply:
@@ -182,6 +179,26 @@ class TelegramService:
             f"⏸ Trade alerts and watches muted until {fmt_time(until, tz, True)} Budapest. "
             "Ops and risk alerts keep coming. /resume to unmute."
         )
+
+    def cmd_restart(self, args) -> Reply:
+        now = int(time.time())
+        busy = sessions.active_session(self.cfg, now)
+        warn = f"\n⚠️ The {busy[0].upper()} session is running right now." if busy else ""
+        markup = {"inline_keyboard": [[{"text": "Restart MT5 now", "callback_data": f"rm:{now}"}]]}
+        return Reply(
+            "Restart the MT5 terminal? It is back in about a minute and reports its own outage "
+            f"and recovery.{warn}\nThe button works for 2 minutes.",
+            markup=markup,
+        )
+
+    def cb_restart(self, parts: list[str]) -> str:
+        """Confirm button of /restart_mt5. Single-use and only valid for 2 minutes."""
+        now = int(time.time())
+        if len(parts) != 1 or not parts[0].isdigit() or not 0 <= now - int(parts[0]) <= 120:
+            return "Button expired. Send /restart_mt5 again."
+        ok, message = restart_mt5()
+        self._with_conn(lambda c: db.log_event(c, "restart_mt5", {"ok": ok, "result": message}))
+        return "MT5 restarted." if ok else f"Restart failed: {message}"
 
     def cmd_resume(self, args) -> Reply:
         self._with_conn(lambda c: db.kv_delete(c, "paused_until"))

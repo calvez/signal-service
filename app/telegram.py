@@ -92,11 +92,18 @@ class TelegramApi:
 class Bot:
     """Routes updates to command handlers. `commands` maps '/name' -> handler(args) -> Reply."""
 
-    def __init__(self, settings: Settings, api: TelegramApi, commands: dict[str, Callable]):
+    def __init__(
+        self,
+        settings: Settings,
+        api: TelegramApi,
+        commands: dict[str, Callable],
+        actions: dict[str, Callable] | None = None,
+    ):
         self.s = settings
         self.api = api
         self.chat_id = settings.secrets.telegram_chat_id
         self.commands = commands
+        self.actions = actions or {}  # inline-button prefix -> handler(parts) -> answer text
         self._stop = threading.Event()
 
     # ------------------------------------------------------------------ allowlist
@@ -159,6 +166,12 @@ class Bot:
             self.api.answer_callback(cb["id"])
             return
         parts = data.split(":")
+        if parts[0] in self.actions:
+            answer = self.actions[parts[0]](parts[1:])
+            self.api.answer_callback(cb["id"], answer)
+            if msg.get("message_id"):  # the button is single-use
+                self.api.edit_markup(chat_id, msg["message_id"], {"inline_keyboard": []})
+            return
         if len(parts) != 3 or parts[0] != "fb" or parts[2] not in CHOICES or not parts[1].isdigit():
             self.api.answer_callback(cb["id"], "Unknown button")
             return
@@ -211,23 +224,48 @@ class Bot:
 class Reply:
     """What a command handler wants sent: text, or a photo with a caption."""
 
-    def __init__(self, text: str = "", png: bytes | None = None):
-        self.text, self.png = text, png
+    def __init__(self, text: str = "", png: bytes | None = None, markup: dict | None = None):
+        self.text, self.png, self.markup = text, png, markup
 
     def send(self, api: TelegramApi, chat_id) -> None:
         if self.png:
             api.send_photo(chat_id, self.png, self.text, silent=True)
         else:
-            api.send_message(chat_id, self.text, silent=True)
+            api.send_message(chat_id, self.text, silent=True, markup=self.markup)
 
 
-def take_screenshot(display: str = ":99") -> bytes | None:
-    """PNG of the headless MT5 display via ImageMagick. None if it is not available."""
+# The service runs as the unprivileged user "signal"; deploy/sudoers/signal-mt5 lets it run
+# exactly these two commands and nothing else.
+SCREENSHOT_CMD = [
+    "sudo",
+    "-n",
+    "-u",
+    "mt5",
+    "/usr/bin/import",
+    "-display",
+    ":99",
+    "-window",
+    "root",
+    "png:-",
+]
+RESTART_CMD = ["sudo", "-n", "/usr/bin/systemctl", "restart", "mt5-terminal"]
+
+
+def take_screenshot() -> bytes | None:
+    """PNG of the headless MT5 display (read-only). None if it is not available."""
     try:
-        res = subprocess.run(
-            ["import", "-display", display, "-window", "root", "png:-"],
-            capture_output=True, timeout=15, check=False,
-        )  # fmt: skip
+        res = subprocess.run(SCREENSHOT_CMD, capture_output=True, timeout=20, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return res.stdout if res.returncode == 0 and res.stdout[:4] == b"\x89PNG" else None
+
+
+def restart_mt5() -> tuple[bool, str]:
+    """Restart the mt5-terminal service. Returns (ok, short message)."""
+    try:
+        res = subprocess.run(RESTART_CMD, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, type(exc).__name__
+    if res.returncode != 0:
+        return False, (res.stderr.strip().splitlines() or ["failed"])[-1][:120]
+    return True, "restarted"

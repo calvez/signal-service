@@ -31,6 +31,10 @@ chmod 600 "$DEST/.env"
 # Python 3.12 from the system; no downloads.
 (cd "$DEST" && sudo -u signal env HOME=/var/lib/signal UV_PYTHON_DOWNLOADS=never uv sync --frozen --no-dev)
 
+# Narrow sudo rules for /screenshot and /restart_mt5 (validated before it is installed).
+visudo -cf "$SRC/deploy/sudoers/signal-mt5" >/dev/null
+install -m 440 "$SRC/deploy/sudoers/signal-mt5" /etc/sudoers.d/signal-mt5
+
 cp "$SRC/deploy/signal-service.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable signal-service >/dev/null
