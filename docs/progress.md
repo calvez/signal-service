@@ -87,3 +87,9 @@
 - **Prompt v2** (`prompts/market_read_v2.md`, now the configured version): v1 plus two explicit rules, because K3 first wrote a `reason` longer than 300 characters and once answered `watch` without a setup (both are rejected by the validator, correctly). v1 stays in the repo. With v2: 5 of 5 answers valid; 2 of them were then rejected by the price rules (reward/risk, stop distance), which is the validator doing its job.
 - **FTMO limits** (`initial_balance 80000`, daily loss 5 %, max loss 10 %, reset midnight Prague): confirmed by Lorant, no change.
 - **Server time:** to be determined from the real FTMO demo heartbeats (T10): run `scripts/check_server_time.py` once MT5 reports, and again between 25 Oct and 1 Nov 2026.
+
+## Account (from Lorant, after T9)
+- FTMO 2-step, **€160,000**: max daily loss −€8,000 (5 %), max loss −€16,000 (10 %), profit target €8,000 (this is the 5 % figure shown for the step he pasted), minimum 2 trading days. `ftmo.initial_balance` in `config.yaml` is now 160000 (it was the placeholder 80000); the percentages already matched. Docs examples updated.
+- `CLAUDE.md` still says "€80k account" in its first section. It is read-only for me, so Lorant should edit that line.
+- The profit target and the minimum trading days are not tracked in phase 1.
+- The free-trial demo account that MT5 will log into may show a different balance. The first heartbeat shows it, and the risk percentages are always computed against `initial_balance`, so compare the two then.

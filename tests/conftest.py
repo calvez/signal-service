@@ -12,6 +12,7 @@ AUTH = {"Authorization": f"Bearer {TOKEN}"}
 @pytest.fixture
 def settings(tmp_path) -> Settings:
     raw = yaml.safe_load(open("config.example.yaml"))
+    raw["ftmo"]["initial_balance"] = 80000  # the risk tests are about logic, not the real account
     secrets = Secrets(_env_file=None, ingest_token=TOKEN, db_path=str(tmp_path / "t.db"))
     return Settings(secrets=secrets, config=AppConfig.model_validate(raw))
 

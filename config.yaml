@@ -55,7 +55,7 @@ reports:
   tz: Europe/Berlin
 
 ftmo:                               # confirm against your account's objectives
-  initial_balance: 80000
+  initial_balance: 160000
   daily_loss_pct: 5
   max_loss_pct: 10
   day_reset_tz: Europe/Prague       # daily limit resets at midnight CE(S)T

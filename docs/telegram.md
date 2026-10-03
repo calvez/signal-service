@@ -32,7 +32,7 @@ GER40  H1 bull · D1 bull → aligned bull · prev day 24,180–24,415 · gap +3
 UK100  context only · H1 bear · D1 neutral
 News: none in window
 LLM: kimi-… · prompt v1 · spend today $0.00 / $3.00
-MT5: connected · heartbeat 12 s ago · balance 80,000.00 EUR
+MT5: connected · heartbeat 12 s ago · balance 160,000.00 EUR
 ```
 
 ## 2. Commands
@@ -58,7 +58,7 @@ MT5        connected · heartbeat 8 s ago · EA 1.00
 Data       GER40 M5 21:10 ✓ · US100 M5 21:10 ✓ · US30 M5 21:10 ✓ · UK100 M5 21:10 ✓
 Account    balance 80,412.50 · equity 80,390.10 EUR · 1 position (−22.40)
 Today      +412.50 closed · −22.40 open
-FTMO       daily loss used 0% of 4,000 · max loss used 0% of 8,000
+FTMO       daily loss used 0% of 8,000 · max loss used 0% of 16,000
 Signals    3 reads · 1 alert · 0 watch · paused: no
 LLM        $0.42 / $3.00 today · last call 21:10 OK (2.8 s)
 Next       EU session Mon 09:00 Berlin
@@ -69,7 +69,7 @@ The header turns 🟡 for warnings and 🔴 when MT5 is down, disconnected or da
 
 Configured limits (2-step defaults; **ASK** Lorant to confirm against his account's objectives):
 - `daily_loss_pct: 5` — measured from the balance at **midnight Europe/Prague**. Store that balance from the first heartbeat after midnight; equity (incl. floating) below `day_start_balance − limit` breaches.
-- `max_loss_pct: 10` — from the initial balance (`initial_balance: 80000`).
+- `max_loss_pct: 10` — from the initial balance (`initial_balance: 160000`).
 
 Warn once per level per day when the used share of either limit crosses **50 %** and **80 %**. Also warn when positions are open within 10 minutes of a configured high-impact news time, and when positions are still open at 21:45 Berlin on a Friday.
 
