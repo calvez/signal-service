@@ -9,6 +9,7 @@ User=mt5
 Environment=DISPLAY=:99
 Environment=WINEPREFIX=/home/mt5/.mt5
 Environment=WINEDEBUG=-all
+Environment="WINEDLLOVERRIDES=mscoree,mshtml="
 WorkingDirectory=/home/mt5/.mt5/drive_c/Program Files/MetaTrader 5
 # startup.ini logs in, enables WebRequest for the service URL and attaches BarPusher.
 ExecStart=/usr/bin/wine "C:\\Program Files\\MetaTrader 5\\terminal64.exe" "/config:C:\\Program Files\\MetaTrader 5\\config\\startup.ini"

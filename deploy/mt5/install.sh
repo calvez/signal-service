@@ -14,7 +14,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PREFIX="/home/$MT5_USER/.mt5"
 MT5_DIR="$PREFIX/drive_c/Program Files/MetaTrader 5"
-as_mt5() { sudo -u "$MT5_USER" env DISPLAY=:99 WINEPREFIX="$PREFIX" WINEDEBUG=-all "$@"; }
+# WINEDLLOVERRIDES: without it Wine opens a "install Mono/Gecko?" dialog on the display nobody
+# watches and wineboot waits for it forever. MT5 needs neither.
+as_mt5() { sudo -u "$MT5_USER" env DISPLAY=:99 WINEPREFIX="$PREFIX" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=" "$@"; }
 
 for f in startup.ini BarPusher.set; do
   [ -f "$HERE/$f" ] || { echo "Missing $HERE/$f — copy it from $f.example and fill it in."; exit 1; }
