@@ -35,6 +35,10 @@ cp "$SRC/deploy/signal-service.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable signal-service >/dev/null
 systemctl restart signal-service
-sleep 4
 systemctl is-active signal-service
-curl -fsS http://127.0.0.1:8000/health && echo
+for _ in $(seq 1 30); do
+  curl -fsS http://127.0.0.1:8000/health && echo && exit 0
+  sleep 1
+done
+echo "Service did not answer on /health: journalctl -u signal-service -n 50"
+exit 1
