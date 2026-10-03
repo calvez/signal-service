@@ -28,7 +28,13 @@ mkdir -pm755 /etc/apt/keyrings
 wget -qO /etc/apt/keyrings/winehq-archive.key https://dl.winehq.org/wine-builds/winehq.key
 wget -qNP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/ubuntu/dists/noble/winehq-noble.sources
 apt-get update
-apt-get install -y --install-recommends winehq-stable
+# Wine 10.0 on purpose: with Wine 11 the MT5 installer and terminal stop with "A debugger has
+# been found running in your system" (MetaQuotes' anti-debug check; known Wine 11 issue).
+WINE_VERSION="10.0.0.0~noble-1"
+apt-mark unhold winehq-stable wine-stable wine-stable-amd64 wine-stable-i386 >/dev/null 2>&1 || true
+apt-get install -y --install-recommends --allow-downgrades \
+  "winehq-stable=$WINE_VERSION" "wine-stable=$WINE_VERSION" \
+  "wine-stable-amd64=$WINE_VERSION" "wine-stable-i386:i386=$WINE_VERSION"
 apt-get install -y xvfb openbox imagemagick xdotool fonts-dejavu-core
 # Pin Wine: an unplanned Wine upgrade is the most likely thing to break MT5.
 apt-mark hold winehq-stable wine-stable wine-stable-amd64 wine-stable-i386 || true
@@ -44,6 +50,7 @@ sleep 3
 
 echo "== Wine prefix + MT5 (silent install) =="
 as_mt5 wineboot --init
+as_mt5 winecfg -v win10
 as_mt5 wget -qO "/home/$MT5_USER/mt5setup.exe" \
   https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe
 as_mt5 wine "/home/$MT5_USER/mt5setup.exe" /auto || true
@@ -54,12 +61,13 @@ sleep 20
 as_mt5 wineserver -k || true
 
 echo "== EA, settings, start config =="
+# MQL5/ only appears after the terminal's first start, so create the folders we need.
+install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/MQL5" "$MT5_DIR/MQL5/Experts" "$MT5_DIR/MQL5/Presets" "$MT5_DIR/config"
 install -o "$MT5_USER" -g "$MT5_USER" -m 644 "$REPO/mt5/BarPusher.mq5" "$MT5_DIR/MQL5/Experts/BarPusher.mq5"
-install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/MQL5/Presets" "$MT5_DIR/config"
 install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/BarPusher.set" "$MT5_DIR/MQL5/Presets/BarPusher.set"
 install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/startup.ini"   "$MT5_DIR/config/startup.ini"
 # Compile headless; MetaEditor writes a log next to the source.
-as_mt5 wine "$MT5_DIR/metaeditor64.exe" /compile:"C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\BarPusher.mq5" /log || true
+as_mt5 wine "$MT5_DIR/MetaEditor64.exe" /compile:"C:\\Program Files\\MetaTrader 5\\MQL5\\Experts\\BarPusher.mq5" /log || true
 LOG="$MT5_DIR/MQL5/Experts/BarPusher.log"
 if [ -f "$MT5_DIR/MQL5/Experts/BarPusher.ex5" ]; then
   echo "BarPusher compiled."
