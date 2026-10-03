@@ -56,7 +56,7 @@ Unknown commands get the help text. Every command and its result is logged in `e
 🟢 All good · 21:14 Budapest
 MT5        connected · heartbeat 8 s ago · EA 1.00
 Data       GER40 M5 21:10 ✓ · US100 M5 21:10 ✓ · US30 M5 21:10 ✓ · UK100 M5 21:10 ✓
-Account    balance 80,412.50 · equity 80,390.10 EUR · 1 position (−22.40)
+Account    balance 160,412.50 · equity 160,390.10 EUR · 1 position (−22.40)
 Today      +412.50 closed · −22.40 open
 FTMO       daily loss used 0% of 8,000 · max loss used 0% of 16,000
 Signals    3 reads · 1 alert · 0 watch · paused: no
