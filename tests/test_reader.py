@@ -246,3 +246,73 @@ def test_unexpected_bug_fails_closed(settings, monkeypatch):
     r = run_read(settings, llm, SYMBOL, BAR, now=NOW)
     assert r.status == "skipped" and r.reason == "crashed" and fake.requests == []
     assert q(settings, "SELECT * FROM events WHERE kind='read_crashed'")
+
+
+# ------------------------------------------------------------------ engine mode (prompt v3)
+from app.strategies import Candidate  # noqa: E402
+
+
+class OneLong:
+    name, version = "testrule", "1"
+
+    def __init__(self, propose=True):
+        self.propose = propose
+
+    def candidates(self, ev):
+        if not self.propose:
+            return []
+        entry = round(ev.last_close + 1, 1)
+        return [Candidate("H2", "long", entry, round(entry - ev.atr, 1), round(entry + 2 * ev.atr, 1),
+                          True, evidence={"h_count": 2})]  # fmt: skip
+
+
+def engine(settings, monkeypatch, strategy, content):
+    settings.config.engine.strategy = "testrule"
+    monkeypatch.setattr("app.reader.get_strategy", lambda name: strategy)
+    llm, fake = make(settings, FakeOpenRouter())
+    fake.content = content
+    return llm, fake
+
+
+def recommendation(**over):
+    body = {"schema": 2, "symbol": SYMBOL, "bar_time_utc": BAR_ISO,
+            "context": {"htf_alignment": "aligned_bull", "day_type": "trend_from_open", "always_in": "long"},
+            "decision": "take", "candidate_id": 1, "grade": "A", "reason": "H2 at the EMA in a bull trend"}  # fmt: skip
+    body.update(over)
+    return json.dumps(body)
+
+
+def test_engine_take_stores_alert_with_python_prices(settings, monkeypatch):
+    llm, fake = engine(settings, monkeypatch, OneLong(), recommendation())
+    r = run_read(settings, llm, SYMBOL, BAR, now=NOW)
+    assert r.action == "alert", r
+    user = fake.requests[0]["messages"][1]["content"]
+    assert "Candidates from the Python strategy testrule:1" in user and "1) H2 long" in user
+    assert "60-minute EMA20" in user and "evidence: h_count=2" in user
+    (read,) = q(settings, "SELECT * FROM reads")
+    setup = json.loads(read["setup"])
+    assert setup["strategy"] == "testrule:1" and setup["candidate_id"] == 1
+    assert setup["evidence"] == {"h_count": 2} and read["prompt_version"] == "v3"
+    assert read["model_action"] == "take" and read["push"] == 1
+
+
+def test_engine_without_candidates_never_calls_the_llm(settings, monkeypatch):
+    llm, fake = engine(settings, monkeypatch, OneLong(propose=False), recommendation())
+    r = run_read(settings, llm, SYMBOL, BAR, now=NOW)
+    assert (r.status, r.reason) == ("skipped", "no_candidate") and fake.requests == []
+
+
+def test_engine_skip_and_bad_answers_never_alert(settings, monkeypatch):
+    for content in (recommendation(decision="skip", candidate_id=None, grade=None),
+                    recommendation(candidate_id=7), "nonsense"):  # fmt: skip
+        settings2 = settings
+        llm, fake = engine(settings2, monkeypatch, OneLong(), content)
+        conn = db.connect(settings2.db_path)
+        conn.execute("DELETE FROM reads")
+        conn.commit()
+        conn.close()
+        assert run_read(settings2, llm, SYMBOL, BAR, now=NOW).action == "none"
+
+
+def test_engine_mode_is_off_by_default(settings):
+    assert settings.config.engine.strategy == ""

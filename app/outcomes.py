@@ -1,15 +1,18 @@
 """Hypothetical outcome simulator. Everything here is SIMULATED, not a real trade result.
 
-For every alert/watch read it replays the M5 bars that followed the signal bar:
+For every alert/watch read it replays the bars that followed the signal bar (M5 live; M5 or the
+finer M1 bars in backtests):
 
-  1. ENTRY    The entry is a stop order. It triggers when a bar of the next ENTRY_WINDOW_BARS
-              (3) bars trades through the entry price: high >= entry for a long, low <= entry
-              for a short. No trigger in that window -> `no_entry` (not counted in R). The
-              fill is the entry price itself; no slippage or spread is modelled.
+  1. ENTRY    The entry is a stop order. It triggers when price trades through the entry within
+              the next ENTRY_WINDOW_BARS (3) M5 bars, i.e. before signal open + 4 x 5 min:
+              high >= entry for a long, low <= entry for a short. No trigger in that window ->
+              `no_entry` (not counted in R). The fill is the entry price itself; spread is
+              handled by the backtester as a cost in R, slippage is not modelled.
   2. EXIT     From the entry bar onwards, whichever of stop or target is hit first. Bars only
               give high and low, so when one bar touches BOTH, the trade counts as a LOSS.
               That includes the entry bar: if it triggers the entry and also reaches the stop,
-              it is a loss, because the order of events inside the bar is unknown.
+              it is a loss, because the order of events inside the bar is unknown. With M1
+              bars this ambiguity is five times rarer.
   3. RESULT   win = +reward/risk (R), loss = -1 R.
   4. TIMEOUT  Still open at the cash close of that session day: `expired`, marked to the last
               close (R can be positive or negative).
@@ -40,27 +43,37 @@ class Outcome:
     exit_t: int | None = None
 
 
-def simulate(setup: dict, signal_open: int, bars: pd.DataFrame, horizon: int, now: int) -> Outcome:
-    """Replay `bars` (closed M5 bars, UTC index) for one setup. Pure function, no database.
+def simulate(
+    setup: dict,
+    signal_open: int,
+    bars: pd.DataFrame,
+    horizon: int,
+    now: int,
+    bar_seconds: int = M5_SEC,
+) -> Outcome:
+    """Replay `bars` (closed bars of `bar_seconds` length, UTC index) for one M5 signal.
+    Pure function, no database.
 
-    `signal_open`: open time of the signal bar. `horizon`: UTC time when an open trade expires.
+    `signal_open`: open time of the M5 signal bar. `horizon`: UTC time when an open trade
+    expires. Bars inside the signal bar itself (M1 bars before signal_open + 5 min) are ignored.
     """
     long = setup["direction"] == "long"
     entry, stop, target = setup["entry"], setup["stop"], setup["target"]
     risk = abs(entry - stop)
     reward_r = abs(target - entry) / risk
-    window_end = signal_open + ENTRY_WINDOW_BARS * M5_SEC  # last bar open that may trigger
+    first_open = signal_open + M5_SEC  # the signal bar has closed here
+    entry_deadline = first_open + ENTRY_WINDOW_BARS * M5_SEC  # end of the 3rd M5 bar
 
     entered_at: int | None = None
     last_open: int | None = None
     last_close = entry
     for ts, bar in bars.iterrows():
         t = int(ts.timestamp())
-        if t <= signal_open or t >= horizon:
+        if t < first_open or t >= horizon:
             continue
         last_open, last_close = t, float(bar["c"])
         if entered_at is None:
-            if t > window_end:
+            if t >= entry_deadline:
                 return Outcome("no_entry")
             triggered = bar["h"] >= entry if long else bar["l"] <= entry
             if not triggered:
@@ -73,11 +86,11 @@ def simulate(setup: dict, signal_open: int, bars: pd.DataFrame, horizon: int, no
         if hit_target:
             return Outcome("win", round(reward_r, 2), entered_at, t)
 
-    data_complete = (last_open is not None and last_open + M5_SEC >= horizon) or (
+    data_complete = (last_open is not None and last_open + bar_seconds >= horizon) or (
         now >= horizon + GIVE_UP_AFTER_SEC
     )
     if entered_at is None:
-        window_over = last_open is not None and last_open >= window_end
+        window_over = last_open is not None and last_open + bar_seconds >= entry_deadline
         return Outcome("no_entry") if (window_over or data_complete) else Outcome("pending")
     if not data_complete:
         return Outcome("pending", entry_t=entered_at)

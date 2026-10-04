@@ -17,21 +17,21 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from app import db, features, htf, sessions
+from app import db, features, sessions
 from app.config import Settings
+from app.evaluation import D1_WINDOW, H1_WINDOW, M5_WINDOW, Skip, evaluate_bar
 from app.llm import LlmClient, parse_json_object
-from app.validate import Expected, validate_read
+from app.strategies import get_strategy
+from app.validate import check_setup, validate_read, validate_recommendation
 
 log = logging.getLogger("signal.reader")
 
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 M5_SEC = 300
-MIN_HISTORY_BARS = 60  # EMA/ATR/swings need warm-up
 STALE_AFTER_SEC = 2 * M5_SEC  # CLAUDE.md: never act on data older than two bar periods
-M5_LOAD = 600
 
 # Skips that are normal every day are only logged to the console, not stored as events.
-QUIET_SKIPS = {"not_traded", "outside_session"}
+QUIET_SKIPS = {"not_traded", "outside_session", "no_candidate"}
 
 _inflight: set[tuple[str, int]] = set()
 _inflight_lock = threading.Lock()
@@ -183,68 +183,44 @@ def _run(settings, llm, conn, symbol, bar_open, now) -> ReadResult:
     if digits is None:
         return _skip(conn, symbol, bar_open, "unknown_digits")
 
-    m5 = db.load_bars(conn, symbol, "M5", until_utc=bar_open, limit=M5_LOAD)
-    if m5.empty or int(m5.index[-1].timestamp()) != bar_open:
-        return _skip(conn, symbol, bar_open, "bar_not_stored")
-    if len(m5) < MIN_HISTORY_BARS:
-        return _skip(conn, symbol, bar_open, "not_enough_history")
+    # ---- the Python evaluation (the same code the backtester runs)
+    try:
+        ev = evaluate_bar(
+            cfg, symbol, bar_open,
+            db.load_bars(conn, symbol, "M5", until_utc=bar_open, limit=M5_WINDOW),
+            db.load_bars(conn, symbol, "H1", until_utc=bar_open + M5_SEC, limit=H1_WINDOW),
+            db.load_bars(conn, symbol, "D1", until_utc=bar_open + M5_SEC, limit=D1_WINDOW),
+            digits,
+        )  # fmt: skip
+    except Skip as skip:
+        return _skip(conn, symbol, bar_open, str(skip))
+    values = prompt_values(cfg, ev)
+    if cfg.engine.strategy:
+        return _run_engine(settings, llm, conn, ev, values, now)
+    return _run_llm_only(settings, llm, conn, ev, values, now)
 
-    # ---- deterministic higher-timeframe check (his H1/D1 rule)
-    asof = pd.Timestamp(bar_open + M5_SEC, unit="s", tz="UTC")  # the evaluated bar has closed
-    fc = cfg.features
-    h1 = htf.htf_state(
-        db.load_bars(conn, symbol, "H1", until_utc=bar_open + M5_SEC, limit=300),
-        htf.H1_SEC, asof, fc.ema_period, fc.swing_confirm_bars,
-    )  # fmt: skip
-    d1 = htf.htf_state(
-        db.load_bars(conn, symbol, "D1", until_utc=bar_open + M5_SEC, limit=150),
-        htf.D1_SEC, asof, fc.ema_period, fc.swing_confirm_bars,
-    )  # fmt: skip
-    alignment = htf.alignment(h1.state, d1.state, cfg.rules.htf_neutral_counts_as_conflict)
-    if alignment == "conflict":
-        return _skip(conn, symbol, bar_open, f"htf_conflict (H1 {h1.state}, D1 {d1.state})")
 
-    # ---- features
-    stz = cfg.sessions[session].tz
-    day = pd.Series(m5.index.tz_convert(stz).date, index=m5.index)
-    feats = features.compute_features(m5, fc.ema_period, fc.atr_period, fc.swing_confirm_bars, day)
-    last = feats.iloc[-1]
-    atr_now = float(last["atr"])
-    if pd.isna(atr_now):
-        return _skip(conn, symbol, bar_open, "atr_unavailable")
-
-    local_day = sessions.local_date(cfg, session, bar_open)
-    prev_day = sessions.previous_trading_day(cfg, session, local_day)
-    cutoff = pd.Timestamp(sessions.cash_close_utc(cfg, session, prev_day), unit="s", tz="UTC")
-    ctx = features.day_context(
-        feats,
-        pd.Timestamp(session_start, unit="s", tz="UTC"),
-        fc.opening_range_bars,
-        features.prior_close(m5, cutoff),
-    )
-    hint = features.day_type_hint(feats, ctx, atr_now)
-    if ctx is None:
-        return _skip(conn, symbol, bar_open, "no_day_context")
-
-    # ---- prompt
-    bar_iso = _iso(bar_open)
+def prompt_values(cfg, ev) -> dict:
+    """Placeholder values shared by all prompt versions (built from the Python evaluation)."""
+    d, stz, ctx = ev.digits, ev.session_tz, ev.ctx
+    fmt = lambda x: f"{x:.{d}f}"  # noqa: E731
     z = ZoneInfo(stz)
-    last_close = float(last["c"])
-    fmt = lambda x: f"{x:.{digits}f}"  # noqa: E731
-    values = {
-        "symbol": symbol,
-        "name": sym.name,
-        "session": session.upper(),
-        "bar_index_in_session": sessions.bar_index_in_session(cfg, session, bar_open),
-        "bar_time_utc": bar_iso,
-        "bar_time_local": f"{datetime.fromtimestamp(bar_open, tz=z):%Y-%m-%d %H:%M}",
+    return {
+        "symbol": ev.symbol,
+        "name": cfg.symbols[ev.symbol].name,
+        "session": ev.session.upper(),
+        "bar_index_in_session": ev.bar_index,
+        "bar_time_utc": ev.bar_iso,
+        "bar_time_local": f"{datetime.fromtimestamp(ev.bar_open, tz=z):%Y-%m-%d %H:%M}",
         "session_tz": stz,
-        "tick_size": f"{10**-digits:.{digits}f}",
-        "atr": fmt(atr_now),
-        "h1_state": h1.state,
-        "d1_state": d1.state,
-        "htf_alignment": alignment,
-        "day_type_hint": hint,
+        "tick_size": f"{10**-d:.{d}f}",
+        "atr": fmt(ev.atr),
+        "h1_state": ev.h1.state,
+        "d1_state": ev.d1.state,
+        "htf_alignment": ev.alignment,
+        "h1_ema": "n/a" if ev.h1_ema is None else (
+            f"{fmt(ev.h1_ema)} (last close {ev.last_close - ev.h1_ema:+.{d}f} pts from it)"),
+        "day_type_hint": ev.hint,
         "session_open": fmt(ctx["session_open"]),
         "or_low": fmt(ctx["or_low"]),
         "or_high": fmt(ctx["or_high"]),
@@ -253,41 +229,45 @@ def _run(settings, llm, conn, symbol, bar_open, now) -> ReadResult:
         "pct_in_range": f"{ctx['pct_in_range']:.0f}",
         "ema_crosses": ctx["ema_crosses"],
         "bars_same_side": ctx["bars_same_side"],
-        "gap_pts": "n/a" if ctx["gap_pts"] is None else f"{ctx['gap_pts']:+.{digits}f}",
-        "swings": _swings_text(feats, stz, digits),
-        "leg_count": _legs_text(last),
+        "gap_pts": "n/a" if ctx["gap_pts"] is None else f"{ctx['gap_pts']:+.{d}f}",
+        "swings": _swings_text(ev.feats, stz, d),
+        "leg_count": _legs_text(ev.last),
         "news_window": cfg.news_window_min,
-        "news_flag": sessions.news_flag(cfg, bar_open) or "none",
-        "n": min(fc.prompt_bars, len(feats)),
-        "bar_table": _bar_table(feats, fc.prompt_bars, stz, digits),
-        "schema_json": schema_json(symbol, bar_iso),
-    }
-    system, user_tpl = load_prompt(cfg.llm.prompt_version)
-    user = render(user_tpl, values)
+        "news_flag": ev.news or "none",
+        "n": min(cfg.features.prompt_bars, len(ev.feats)),
+        "bar_table": _bar_table(ev.feats, cfg.features.prompt_bars, stz, d),
+        "schema_json": schema_json(ev.symbol, ev.bar_iso),
+    }  # fmt: skip
 
-    # ---- ask, parse, validate
-    res = llm.complete(system, user, purpose="market_read")
-    base = {
+
+def _base_row(cfg, ev, res, now, prompt_version: str) -> dict:
+    return {
         "ts_utc": int(now),
-        "symbol": symbol,
-        "bar_time_utc": bar_open,
-        "session": session,
+        "symbol": ev.symbol,
+        "bar_time_utc": ev.bar_open,
+        "session": ev.session,
         "llm_call_id": res.call_id,
         "model": cfg.llm.model,
-        "prompt_version": cfg.llm.prompt_version,
-        "htf_alignment": alignment,
-        "day_type_hint": hint,
-        "atr": atr_now,
-        "last_close": last_close,
+        "prompt_version": prompt_version,
+        "htf_alignment": ev.alignment,
+        "day_type_hint": ev.hint,
+        "atr": ev.atr,
+        "last_close": ev.last_close,
     }
+
+
+def _run_llm_only(settings, llm, conn, ev, values, now) -> ReadResult:
+    """No Python strategy yet: the LLM reads the chart and may propose a setup (prompt v2)."""
+    cfg = settings.config
+    system, user_tpl = load_prompt(cfg.llm.prompt_version)
+    res = llm.complete(system, render(user_tpl, values), purpose="market_read")
+    base = _base_row(cfg, ev, res, now, cfg.llm.prompt_version)
     if not res.ok:
         row = {**base, "action": "none", "validation": f"llm error: {res.error}"}
         return ReadResult("stored", row["validation"], db.insert_read(conn, row), "none")
 
     raw = parse_json_object(res.text or "")
-    expected = Expected(symbol, bar_iso, alignment, atr_now, last_close, hint,
-                        ctx["pct_in_range"], digits)  # fmt: skip
-    out = validate_read(raw, expected, cfg.rules)
+    out = validate_read(raw, ev.expected(), cfg.rules)
     db.update_llm_call(conn, res.call_id, json.dumps(raw) if raw is not None else None, out.summary)
     row = {
         **base,
@@ -298,6 +278,96 @@ def _run(settings, llm, conn, symbol, bar_open, now) -> ReadResult:
         "setup": json.dumps(out.setup) if out.setup else None,
         "context": json.dumps(out.read.context.model_dump()) if out.read else None,
         "reason": out.read.reason if out.read else None,
+        "validation": out.summary,
+    }
+    read_id = db.insert_read(conn, row)
+    return ReadResult("stored", out.summary, read_id, out.action)
+
+
+# --------------------------------------------------------------------------- engine mode
+def schema_json_v2(symbol: str, bar_time_iso: str) -> str:
+    return json.dumps(
+        {
+            "schema": 2,
+            "symbol": symbol,
+            "bar_time_utc": bar_time_iso,
+            "context": {
+                "htf_alignment": "aligned_bull | aligned_bear | conflict",
+                "day_type": "trend_from_open | spike_and_channel | trading_range | "
+                "broad_channel | tight_channel | unclear",
+                "always_in": "long | short | neutral",
+            },
+            "decision": "take | watch | skip",
+            "candidate_id": "the id of the candidate, or null for skip",
+            "grade": "A | B, or null for skip",
+            "reason": "max 250 chars, plain language",
+        },
+        indent=2,
+    )
+
+
+def candidates_text(setups: list[dict], ev) -> str:
+    d = ev.digits
+    lines = []
+    for i, s in enumerate(setups, 1):
+        risk = abs(s["entry"] - s["stop"])
+        rr = abs(s["target"] - s["entry"]) / risk
+        trend = "with trend" if s["with_trend"] else "COUNTER-trend"
+        ev_txt = ", ".join(f"{k}={v}" for k, v in s.get("evidence", {}).items()) or "-"
+        lines.append(
+            f"{i}) {s['type']} {s['direction']} ({trend}), strategy grade {s['grade']}: "
+            f"entry {s['entry']:.{d}f} ({'buy' if s['direction'] == 'long' else 'sell'} stop), "
+            f"stop {s['stop']:.{d}f} ({risk:.{d}f} pts, {risk / ev.atr:.1f} ATR), "
+            f"target {s['target']:.{d}f} ({rr:.1f}R); evidence: {ev_txt}"
+        )
+    return "\n".join(lines)
+
+
+def _run_engine(settings, llm, conn, ev, values, now) -> ReadResult:
+    """Python evaluates (strategy candidates), the LLM recommends take / watch / skip."""
+    cfg = settings.config
+    strategy = get_strategy(cfg.engine.strategy)
+    exp = ev.expected()
+    setups = []
+    for cand in strategy.candidates(ev):
+        checked = check_setup(cand.as_setup(), "alert", exp, cfg.rules)
+        if checked.setup is not None:
+            setups.append({**checked.setup, "evidence": dict(cand.evidence)})
+        else:
+            log.info("candidate dropped %s %s: %s", ev.symbol, ev.bar_iso, checked.summary)
+    if not setups:
+        return _skip(conn, ev.symbol, ev.bar_open, "no_candidate")
+
+    tag = f"{strategy.name}:{strategy.version}"
+    values = {**values, "strategy": tag, "candidates": candidates_text(setups, ev),
+              "schema_json": schema_json_v2(ev.symbol, ev.bar_iso)}  # fmt: skip
+    version = cfg.engine.prompt_version
+    system, user_tpl = load_prompt(version)
+    res = llm.complete(system, render(user_tpl, values), purpose="market_read")
+    base = _base_row(cfg, ev, res, now, version)
+    if not res.ok:
+        row = {**base, "action": "none", "validation": f"llm error: {res.error}"}
+        return ReadResult("stored", row["validation"], db.insert_read(conn, row), "none")
+
+    raw = parse_json_object(res.text or "")
+    plain = [{k: v for k, v in s.items() if k != "evidence"} for s in setups]
+    out = validate_recommendation(raw, plain, exp, cfg.rules)
+    db.update_llm_call(conn, res.call_id, json.dumps(raw) if raw is not None else None, out.summary)
+    rec = out.recommendation
+    setup = None
+    if out.setup is not None:
+        chosen = setups[rec.candidate_id - 1]
+        setup = {**out.setup, "strategy": tag, "candidate_id": rec.candidate_id,
+                 "evidence": chosen["evidence"]}  # fmt: skip
+    row = {
+        **base,
+        "model_action": rec.decision if rec else None,
+        "action": out.action,
+        "push": int(out.push),
+        "grade": setup["grade"] if setup else None,
+        "setup": json.dumps(setup) if setup else None,
+        "context": json.dumps(rec.context.model_dump()) if rec else None,
+        "reason": rec.reason if rec else None,
         "validation": out.summary,
     }
     read_id = db.insert_read(conn, row)

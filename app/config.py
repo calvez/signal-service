@@ -116,6 +116,14 @@ class MonitorsCfg(_Strict):
     disk_min_free_pct: int
 
 
+class EngineCfg(_Strict):
+    # Python strategy that evaluates each bar (app/strategies). Empty: no strategy yet, the LLM
+    # reads the chart itself (prompt v2). Set: Python proposes candidates, the LLM only
+    # recommends take / watch / skip for them (prompt v3, prices always from Python).
+    strategy: str = ""
+    prompt_version: str = "v3"
+
+
 class AppConfig(_Strict):
     server_time_mode: str
     symbols: dict[str, SymbolCfg]
@@ -129,6 +137,7 @@ class AppConfig(_Strict):
     reports: ReportsCfg
     ftmo: FtmoCfg
     monitors: MonitorsCfg
+    engine: EngineCfg = EngineCfg()
 
     @field_validator("server_time_mode")
     @classmethod

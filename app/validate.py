@@ -78,6 +78,7 @@ class Outcome:
     summary: str = "ok"  # short text stored in llm_calls.validation / reads.validation
     notes: list[str] = field(default_factory=list)
     read: MarketRead | None = None
+    recommendation: "Recommendation | None" = None  # prompt v3 answer
     setup: dict | None = None  # final setup, prices rounded to the symbol's digits
 
 
@@ -111,6 +112,19 @@ def validate_read(raw: dict | None, exp: Expected, rules: RulesCfg) -> Outcome:
     if read.setup is None:
         return _reject(out, f"action {read.action} without a setup")
 
+    return check_setup(read.setup.model_dump(), read.action, exp, rules, out)
+
+
+def check_setup(
+    setup: dict, action: str, exp: Expected, rules: RulesCfg, out: Outcome | None = None
+) -> Outcome:
+    """Rules 3-10 for one setup, whoever proposed it (the LLM or a Python strategy).
+
+    `setup` needs direction, with_trend, entry, stop, target and grade (other keys are kept).
+    `action` is the wanted action (alert | watch). Returns the final Outcome.
+    """
+    out = out or Outcome()
+
     # 3. his H1/D1 rule is decided by code, whatever the model says
     if exp.htf_alignment == "conflict":
         out.notes.append("htf_conflict")
@@ -118,19 +132,24 @@ def validate_read(raw: dict | None, exp: Expected, rules: RulesCfg) -> Outcome:
         return out
 
     # 10. round first, so every check below sees the prices that would be shown
-    s = read.setup
     digits = exp.digits
-    entry, stop, target = (round(x, digits) for x in (s.entry, s.stop, s.target))
+    try:
+        entry, stop, target = (round(float(setup[k]), digits) for k in ("entry", "stop", "target"))
+    except (KeyError, TypeError, ValueError):
+        return _reject(out, "setup without valid entry/stop/target")
     if not all(math.isfinite(x) and x > 0 for x in (entry, stop, target)):
         return _reject(out, "non-finite or non-positive price")
     if not (math.isfinite(exp.atr) and exp.atr > 0):
         return _reject(out, "ATR unavailable")
 
     # 4. price order
-    if s.direction == "long" and not stop < entry < target:
+    direction = setup.get("direction")
+    if direction == "long" and not stop < entry < target:
         return _reject(out, "long needs stop < entry < target")
-    if s.direction == "short" and not target < entry < stop:
+    if direction == "short" and not target < entry < stop:
         return _reject(out, "short needs target < entry < stop")
+    if direction not in ("long", "short"):
+        return _reject(out, "direction must be long or short")
 
     # 5. stop distance in ATR terms
     risk = abs(entry - stop)
@@ -145,11 +164,10 @@ def validate_read(raw: dict | None, exp: Expected, rules: RulesCfg) -> Outcome:
     if abs(target - entry) / risk < rules.min_reward_risk:
         return _reject(out, "reward/risk below minimum")
 
-    out.setup = {**s.model_dump(), "entry": entry, "stop": stop, "target": target}
-    action = read.action
+    out.setup = {**setup, "entry": entry, "stop": stop, "target": target}
 
     # 8. counter-trend only at the edge of a trading range
-    if not s.with_trend:
+    if not setup.get("with_trend", True):
         at_edge = exp.pct_in_range >= 80 or exp.pct_in_range <= 20
         if not (exp.day_type_hint == "trading_range" and at_edge):
             if action == "alert":
@@ -157,11 +175,59 @@ def validate_read(raw: dict | None, exp: Expected, rules: RulesCfg) -> Outcome:
             action = "watch"
 
     # 9. only configured grades make a sound; the rest is a silent watch
-    if action == "alert" and s.grade not in rules.push_grades:
-        out.notes.append(f"grade {s.grade} is not pushed: alert -> watch")
+    if action == "alert" and setup.get("grade") not in rules.push_grades:
+        out.notes.append(f"grade {setup.get('grade')} is not pushed: alert -> watch")
         action = "watch"
 
     out.action = action
     out.push = action == "alert"
     out.summary = "ok" if not out.notes else "ok: " + "; ".join(out.notes)
     return out
+
+
+# --------------------------------------------------------------------------- prompt v3
+class Recommendation(_Strict):
+    """The LLM's answer when a Python strategy proposed candidates (prompt v3, schema 2)."""
+
+    schema_version: Literal[2] = Field(alias="schema")
+    symbol: str
+    bar_time_utc: str
+    context: ReadContext
+    decision: Literal["take", "watch", "skip"]
+    candidate_id: int | None
+    grade: Literal["A", "B"] | None
+    reason: str = Field(max_length=300)
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+def validate_recommendation(
+    raw: dict | None, candidates: list[dict], exp: Expected, rules: RulesCfg
+) -> Outcome:
+    """Check the LLM's take/watch/skip for the offered candidates (already validated by
+    check_setup; `candidates[i]` is the setup dict of candidate id i+1).
+
+    The final setup always carries the Python prices; the LLM only adds its grade and reason.
+    Fails closed: anything unexpected -> action none.
+    """
+    out = Outcome()
+    if raw is None:
+        return _reject(out, "not a JSON object")
+    try:
+        rec = Recommendation.model_validate(raw)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        return _reject(out, f"schema ({'.'.join(map(str, first['loc']))}: {first['type']})")
+    out.recommendation = rec
+    if rec.symbol != exp.symbol or rec.bar_time_utc != exp.bar_time_utc:
+        return _reject(out, "symbol/bar_time_utc do not match the request")
+    if rec.decision == "skip":
+        out.summary = "ok: skipped by the LLM"
+        return out
+    if rec.candidate_id is None or not 1 <= rec.candidate_id <= len(candidates):
+        return _reject(out, f"{rec.decision} needs a candidate_id from the list")
+    if rec.grade is None:
+        return _reject(out, f"{rec.decision} needs a grade")
+    setup = {**candidates[rec.candidate_id - 1], "grade": rec.grade}
+    action = "alert" if rec.decision == "take" else "watch"
+    return check_setup(setup, action, exp, rules, out)

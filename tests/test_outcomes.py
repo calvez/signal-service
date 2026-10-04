@@ -205,3 +205,39 @@ def test_weekly_export_runs_once_on_saturday_morning(settings):
     assert name == "reads_2026-W41.csv" and b"read_id" in content and b"GER40.cash" in content
     assert svc.weekly_export(c, sat_10 + 60) is None  # once per week
     c.close()
+
+
+# ------------------------------------------------------------------ M1 bars (backtests)
+def m1(rows, first=S + 300):
+    idx = pd.to_datetime([first + 60 * i for i in range(len(rows))], unit="s", utc=True)
+    mids = [(h + low) / 2 for h, low in rows]
+    return pd.DataFrame(
+        {"o": mids, "h": [h for h, _ in rows], "l": [r[1] for r in rows], "c": mids}, index=idx
+    )
+
+
+def test_m1_resolves_what_m5_has_to_call_a_loss():
+    # One M5 bar touching target AND stop is a loss on M5 ...
+    assert run(LONG, [(101, 95), (125, 85)], now=S + 2000).status == "loss"
+    # ... but on M1 the target (125) came first and the stop (85) only later in that 5 minutes
+    rows = [(101, 95)] * 5 + [(125, 100), (110, 100), (100, 85), (95, 90), (95, 90)]
+    r = simulate(LONG, S, m1(rows), FAR, S + 4000, bar_seconds=60)
+    assert (r.status, r.r) == ("win", 2.0)
+
+
+def test_m1_entry_window_is_the_same_15_minutes():
+    quiet = [(99, 95)] * 15  # three M5 bars without a trigger
+    assert (
+        simulate(LONG, S, m1(quiet + [(130, 99)]), FAR, S + 4000, bar_seconds=60).status
+        == "no_entry"
+    )
+    late_trigger = [(99, 95)] * 14 + [(101, 95), (125, 100)]  # trigger in the last minute
+    assert simulate(LONG, S, m1(late_trigger), FAR, S + 4000, bar_seconds=60).status == "win"
+    assert simulate(LONG, S, m1([(99, 95)] * 10), FAR, S + 900, bar_seconds=60).status == "pending"
+
+
+def test_m1_bars_inside_the_signal_bar_are_ignored():
+    inside = m1([(130, 99)] * 4, first=S + 60)  # minutes 1-4 of the signal bar itself
+    after = m1([(99, 95)] * 15 + [(99, 95)])
+    r = simulate(LONG, S, pd.concat([inside, after]), FAR, S + 4000, bar_seconds=60)
+    assert r.status == "no_entry"

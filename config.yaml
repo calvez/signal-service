@@ -65,3 +65,10 @@ monitors:
   heartbeat_timeout_session_sec: 180
   heartbeat_timeout_other_sec: 600
   disk_min_free_pct: 10
+
+engine:
+  # Python strategy for the market evaluation (app/strategies). Empty = none yet: the LLM reads
+  # the chart itself (llm.prompt_version). Set it, e.g. "h2_pullback", and Python proposes the
+  # setups while the LLM recommends take / watch / skip with engine.prompt_version.
+  strategy: ""
+  prompt_version: "v3"

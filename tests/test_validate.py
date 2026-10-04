@@ -162,3 +162,63 @@ def test_prices_rounded_to_symbol_digits():
 @pytest.mark.parametrize("atr", [float("nan"), 0.0, -1.0])
 def test_unusable_atr_rejects(atr):
     assert not validate_read(GOOD, exp(atr=atr), RULES).valid
+
+
+# ------------------------------------------------------------------ prompt v3: recommendations
+from app.validate import validate_recommendation  # noqa: E402
+
+CANDS = [
+    {"direction": "long", "type": "H2", "with_trend": True, "entry_type": "stop",
+     "entry": 24325.0, "stop": 24298.0, "target": 24379.0, "grade": "A"},
+    {"direction": "short", "type": "L2", "with_trend": False, "entry_type": "stop",
+     "entry": 24310.0, "stop": 24337.0, "target": 24256.0, "grade": "B"},
+]  # fmt: skip
+REC = {
+    "schema": 2, "symbol": "GER40.cash", "bar_time_utc": BAR,
+    "context": {"htf_alignment": "aligned_bull", "day_type": "trend_from_open", "always_in": "long"},
+    "decision": "take", "candidate_id": 1, "grade": "A", "reason": "clean H2 at the EMA",
+}  # fmt: skip
+
+
+def rec(**over):
+    return {**REC, **over}
+
+
+def test_take_uses_python_prices_and_pushes():
+    out = validate_recommendation(rec(), CANDS, exp(), RULES)
+    assert out.action == "alert" and out.push and out.valid
+    assert out.setup["entry"] == 24325.0 and out.setup["type"] == "H2"
+
+
+def test_llm_cannot_smuggle_in_prices():
+    out = validate_recommendation(rec(entry=1.0), CANDS, exp(), RULES)  # extra key
+    assert not out.valid and out.action == "none"
+
+
+def test_skip_and_watch():
+    assert (
+        validate_recommendation(
+            rec(decision="skip", candidate_id=None, grade=None), CANDS, exp(), RULES
+        ).action
+        == "none"
+    )
+    w = validate_recommendation(rec(decision="watch"), CANDS, exp(), RULES)
+    assert w.action == "watch" and not w.push
+
+
+@pytest.mark.parametrize("over", [{"candidate_id": 3}, {"candidate_id": 0}, {"candidate_id": None},
+                                  {"grade": None}, {"decision": "buy"}, {"schema": 1},
+                                  {"symbol": "US100.cash"}])  # fmt: skip
+def test_bad_recommendations_fail_closed(over):
+    out = validate_recommendation(rec(**over), CANDS, exp(), RULES)
+    assert out.action == "none" and not out.push
+
+
+def test_grade_b_from_llm_is_silent_and_rules_still_apply():
+    out = validate_recommendation(rec(grade="B"), CANDS, exp(), RULES)
+    assert out.action == "watch"
+    ct = validate_recommendation(rec(candidate_id=2), CANDS, exp(last_close=24312.0), RULES)
+    assert ct.action == "watch"  # counter-trend outside a range edge is downgraded
+    assert (
+        validate_recommendation(rec(), CANDS, exp(htf_alignment="conflict"), RULES).action == "none"
+    )
