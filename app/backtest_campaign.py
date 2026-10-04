@@ -134,7 +134,14 @@ class Result:
 
 
 def run(
-    cfg: AppConfig, conn, strategy, symbols: list[str], start: int, end: int, use_m1: bool = True
+    cfg: AppConfig,
+    conn,
+    strategy,
+    symbols: list[str],
+    start: int,
+    end: int,
+    use_m1: bool = True,
+    advisor=None,
 ) -> Result:
     bc = cfg.brooks
     mgmt_cfg = cfg.model_copy(
@@ -222,7 +229,8 @@ def run(
                 bar["avg_range"] = float(
                     (ev.feats["h"] - ev.feats["l"]).tail(bc.avg_range_bars).mean()
                 )
-            c.on_bar_close(bar, t_close, ev, strategy, bc, flat_due, adds_allowed=not conflict)
+            c.on_bar_close(bar, t_close, ev, strategy, bc, flat_due,
+                           adds_allowed=not conflict, advisor=advisor)  # fmt: skip
             if c.status in ("closed", "cancelled"):
                 finish(c)
                 c = None
@@ -281,6 +289,9 @@ def campaign_rows(campaigns: list[Campaign], risk_pct: float) -> pd.DataFrame:
             "mfe_r": round(c.max_r, 3), "mae_r": round(c.min_r, 3), "reached_2r": c.max_r >= 2.0,
             "first_fill_utc": iso(c.first_fill_at),
             "exit_utc": iso(c.closed[-1]["closed_at"]) if c.closed else "",
+            "ai_decisions": len(c.ai),
+            "ai_overrides": sum(1 for a in c.ai if a["choice"] != a["rule_choice"]),
+            "ai_log": "; ".join(f"{a['point']}:{a['choice']}" for a in c.ai),
             "evidence": str(c.evidence),
         })  # fmt: skip
     return pd.DataFrame(rows)

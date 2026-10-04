@@ -46,6 +46,9 @@ def main() -> int:
     ap.add_argument("--no-m1", action="store_true")
     ap.add_argument("--set", action="append", default=[], help="brooks.<key>=<value>")
     ap.add_argument("--db", default="data/history.db")
+    ap.add_argument("--advisor", choices=["rules", "llm"], default="rules",
+                    help="llm = AI trade management (app/advisor.py), answers cached")  # fmt: skip
+    ap.add_argument("--cache", default="data/backtests/llm_cache.db")
     ap.add_argument("--out")
     args = ap.parse_args()
 
@@ -61,10 +64,22 @@ def main() -> int:
     symbols = args.symbols.split(",") if args.symbols else [
         s for s, c in cfg.symbols.items() if c.role == "traded"]  # fmt: skip
 
+    advisor = None
+    if args.advisor == "llm":
+        from app.advisor import LlmAdvisor
+        from app.config import load_settings as _ls
+        from app.llm import LlmClient
+
+        settings = _ls()
+        settings = settings.model_copy(update={"config": cfg})
+        advisor = LlmAdvisor(settings, LlmClient(settings), cache_path=args.cache)
+        print(f"advisor: LLM {cfg.llm.model}, cache {args.cache}")
+
     t0 = time.time()
     conn = db.connect(args.db)
     start, end = epoch(args.start), epoch(args.end)
-    res = bt.run(cfg, conn, BrooksH2(brooks), symbols, start, end, use_m1=not args.no_m1)
+    res = bt.run(cfg, conn, BrooksH2(brooks), symbols, start, end, use_m1=not args.no_m1,
+                 advisor=advisor)  # fmt: skip
     df = bt.campaign_rows(res.campaigns, brooks.risk_per_trade_pct)
     htf = "off" if args.no_htf else "on"
     took = time.time() - t0
@@ -87,6 +102,8 @@ def main() -> int:
     for sym in symbols:
         if not df.empty and (df["symbol"] == sym).any():
             show(sym, df[df["symbol"] == sym])
+    if advisor is not None:
+        print(f"\nLLM: {advisor.calls} calls, {advisor.cache_hits} from cache")
     out = Path(args.out or f"data/backtests/campaign_{args.variant}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(out, index=False)
