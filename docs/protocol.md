@@ -1,6 +1,16 @@
 # Protocol
 
-All requests are JSON over HTTP on 127.0.0.1 (MT5 runs in the same container). All endpoints except `/health` require `Authorization: Bearer <INGEST_TOKEN>`.
+## 0. Transport: files from the EA, HTTP for everything else
+
+**The EA delivers through a file spool, not HTTP** (since EA 1.10). MT5 only lets an EA call `WebRequest` for URLs entered by hand under Tools > Options. It stores them encrypted, and every start with a start config resets them, so HTTP from the EA stops working after each restart. Instead:
+
+- The EA writes each payload below (§1 bars, §2 heartbeat; same JSON, unchanged) as one file into `MQL5\Files\signal`. That folder is a link to `/var/spool/signal-mt5` (owner `mt5`, group `signal`, mode 2770: only MT5 writes, only the service reads).
+- File names: `bars_<gmt>_<usec>_<n>.json` and `hb_<gmt>_<usec>_<n>.json`. The EA writes `.tmp` first and renames it, so a `.json` file is always complete.
+- The service (`app/spool.py`) checks the folder every 2 s and processes files in name order with exactly the validation of the HTTP endpoints. A file is deleted once stored. A file that fails validation is moved to `rejected/`, nothing from it is stored, and a `spool_rejected` event is logged.
+- If the EA cannot write a file, it keeps its position and retries on the next timer tick (same as a non-200 answer before).
+- A heartbeat's `received_at` is the file's modification time, i.e. when the EA wrote it.
+
+The HTTP endpoints below still exist with the same payloads, as JSON on 127.0.0.1 only. All endpoints except `/health` require `Authorization: Bearer <INGEST_TOKEN>`. Tests and manual checks use them.
 
 ## 1. `POST /v1/bars` — closed bars from the EA
 

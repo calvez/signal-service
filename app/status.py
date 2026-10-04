@@ -169,6 +169,19 @@ def conditions(snap: Snapshot, settings: Settings) -> list[Cond]:
             )
         )
 
+    if snap.hb is not None:
+        # Phase 1 never trades: MT5 runs with algo trading off (deploy/mt5/startup.ini.example).
+        out.append(
+            Cond(
+                "algo_trading_on",
+                bool(snap.hb["trade_allowed"]),
+                "🔴 Algo trading is switched ON in MT5. Phase 1 expects it off; check the "
+                "terminal (/screenshot) and the start config.",
+                "🟢 Algo trading is off in MT5 again",
+                critical=True,
+            )
+        )
+
     out.append(
         Cond(
             "llm_budget",

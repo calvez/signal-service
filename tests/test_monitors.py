@@ -17,7 +17,7 @@ def env(settings):
 
 
 def hb(conn, received_at=NOW, **over):
-    row = dict(ea_version="1.00", account_login=1, server="FTMO-Demo", company="FTMO", balance=80000.0,
+    row = dict(ea_version="1.10", account_login=1, server="FTMO-Demo", company="FTMO", balance=80000.0,
                equity=80000.0, connected=1, trade_allowed=0, positions=0, floating_pl=0.0,
                currency="EUR", time_server=received_at + 10800, server_utc_offset_sec=10800,
                received_at=received_at)  # fmt: skip
@@ -275,3 +275,15 @@ def test_texts_render_with_data(svc):
     brief = reports.brief_text(s.s, c, ts(2026, 10, 5, 6, 46), "eu")
     assert "GER40" in brief and "UK100  context only" in brief and "News: none in window" in brief
     c.close()
+
+
+def test_algo_trading_switched_on_is_a_red_alert(env):
+    settings, conn, engine = env
+    hb(conn, NOW, trade_allowed=0)
+    assert texts(engine.run(conn, NOW), "Algo trading") == []
+    hb(conn, NOW + 60, trade_allowed=1)
+    m = texts(engine.run(conn, NOW + 60), "Algo trading is switched ON")
+    assert len(m) == 1 and not m[0].silent
+    assert texts(engine.run(conn, NOW + 90), "Algo trading") == []  # once
+    hb(conn, NOW + 120, trade_allowed=0)
+    assert len(texts(engine.run(conn, NOW + 120), "Algo trading is off in MT5 again")) == 1

@@ -119,3 +119,11 @@ Still to do: MT5 install (**ASK**), end-to-end check, restic backups (**ASK** St
 - **MT5 build 6235 starts an MCP server** (Tools > Options > MCP, "Enable internal server", 127.0.0.1:22346) through which AI tools could control the terminal, including trading. Disabled, because phase 1 must have no path to execution.
 - **Data:** first heartbeat and the full backfill arrived (4 symbols × 2000 M5 / 500 H1 / 250 D1 bars). Server offset +3 h; matches `ny_plus_7` (and Athens/Nicosia until the Oct 25 – Nov 1 check).
 - **OPEN — WebRequest allow-list:** MT5 only accepts it from Tools > Options (stored encrypted), and every start with `/config` resets all Expert options to the start-config values. So the EA's HTTP calls are blocked after each restart. Decision needed (see chat).
+
+### EA transport switched to files (decision by Lorant, 2026-10-04)
+- MT5 resets the WebRequest allow-list on every start with a start config, and it can only be set in the GUI, so the EA's HTTP calls stopped after each restart. Lorant chose files instead of HTTP.
+- **BarPusher 1.10** writes each payload (same JSON as before) into `MQL5\Files\signal` → `/var/spool/signal-mt5` (owner `mt5`, group `signal`, 2770). It has no network code any more, and on start it closes older duplicate GER40 M5 charts (the start config opens a new one each time).
+- **`app/spool.py`** reads the folder every 2 s with the HTTP endpoints' validation (shared in `app/ingest.py`); bad files go to `rejected/` with a `spool_rejected` event. Market reads run in a 2-thread pool. Tests in `tests/test_spool.py`.
+- **Algo trading off:** start config `[Experts] Enabled=0, AllowLiveTrading=0`. Verified: the EA keeps running and heartbeats report `trade_allowed=false`. New red Telegram alert if a heartbeat ever reports it on.
+- Verified live: EA 1.10 heartbeats and the full backfill arrive through the spool, nothing rejected, one GER40 chart left.
+- `docs/protocol.md` §0, `docs/mt5-linux.md` and `docs/server-setup.md` updated. **`CLAUDE.md` still shows `POST /v1/…` from the EA in its architecture diagram; it is read-only for me, so Lorant should update that line.**

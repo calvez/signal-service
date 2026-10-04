@@ -6,19 +6,22 @@ uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
 import logging
 import secrets
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 
 from app import db
 from app.config import Settings, get_settings
+from app.ingest import UnknownSymbol, read_candidate, store_bars, store_heartbeat
 from app.llm import LlmClient
 from app.models import BarsPayload, HeartbeatPayload
 from app.reader import run_read
 from app.scheduler import TelegramService
+from app.spool import SpoolWatcher
 from app.telegram import TelegramApi
-from app.timeconv import server_to_utc
 
 log = logging.getLogger("signal")
 
@@ -56,6 +59,19 @@ def create_app(
     if telegram is None and sec.telegram_bot_token and sec.telegram_chat_id:
         telegram = TelegramService(settings, TelegramApi(sec.telegram_bot_token))
 
+    # Market reads run in a small pool so ingest never waits for the LLM.
+    readers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="read")
+
+    def start_read(symbol: str, bar_open_utc: int) -> None:
+        if llm is not None:
+            readers.submit(run_read, settings, llm, symbol, bar_open_utc)
+
+    spool = None
+    if Path(sec.spool_dir).is_dir():
+        spool = SpoolWatcher(settings, sec.spool_dir, start_read)
+    else:
+        log.warning("spool dir %s missing: only the HTTP endpoints receive data", sec.spool_dir)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         db.init_db(settings.db_path)
@@ -66,11 +82,16 @@ def create_app(
             db.log_event(conn, "service_start")
         finally:
             conn.close()
+        if spool is not None:
+            spool.start()
         if telegram is not None:
             telegram.start()
         yield
+        if spool is not None:
+            spool.stop()
         if telegram is not None:
             telegram.stop()
+        readers.shutdown(wait=False, cancel_futures=True)
 
     app = FastAPI(title="signal-service", lifespan=lifespan)
 
@@ -100,52 +121,19 @@ def create_app(
         return {"ok": True, "last_bar_utc": last_bar, "last_heartbeat_utc": _iso(hb)}
 
     @app.post("/v1/bars", dependencies=[Depends(require_token)])
-    def post_bars(payload: BarsPayload, background: BackgroundTasks) -> dict:
-        if payload.symbol not in settings.config.symbols:
-            raise HTTPException(status_code=422, detail=f"unknown symbol {payload.symbol!r}")
-        mode = settings.config.server_time_mode
-        now = int(time.time())
-        rows = [
-            {
-                "symbol": payload.symbol,
-                "tf": payload.timeframe,
-                "t_server": b.t,
-                "t_utc": server_to_utc(b.t, mode),
-                "o": b.o,
-                "h": b.h,
-                "l": b.l,
-                "c": b.c,
-                "tv": b.tv,
-                "sp": b.sp,
-                "received_at": now,
-            }
-            for b in payload.bars
-        ]
-        conn = db.connect(settings.db_path)
+    def post_bars(payload: BarsPayload) -> dict:
         try:
-            accepted = db.upsert_bars(conn, rows)
-            db.upsert_symbol_meta(conn, payload.symbol, payload.digits)
-        finally:
-            conn.close()
-        sym = settings.config.symbols[payload.symbol]
-        if llm is not None and payload.timeframe == "M5" and sym.role == "traded":
-            # Only the newest bar of the batch can be fresh; a backfill is skipped as stale.
-            background.add_task(
-                run_read, settings, llm, payload.symbol, max(r["t_utc"] for r in rows)
-            )
-        return {"accepted": accepted}
+            rows = store_bars(settings, payload)
+        except UnknownSymbol as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        bar = read_candidate(settings, payload, rows)
+        if bar is not None:
+            start_read(payload.symbol, bar)
+        return {"accepted": len(rows)}
 
     @app.post("/v1/heartbeat", dependencies=[Depends(require_token)])
     def post_heartbeat(payload: HeartbeatPayload) -> dict:
-        row = payload.model_dump(exclude={"schema_version"})
-        row["connected"] = int(row["connected"])
-        row["trade_allowed"] = int(row["trade_allowed"])
-        row["received_at"] = int(time.time())
-        conn = db.connect(settings.db_path)
-        try:
-            db.insert_heartbeat(conn, row)
-        finally:
-            conn.close()
+        store_heartbeat(settings, payload, int(time.time()))
         return {"ok": True}
 
     return app

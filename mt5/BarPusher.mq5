@@ -1,26 +1,31 @@
 //+------------------------------------------------------------------+
-//| BarPusher.mq5 — phase 1: pushes CLOSED bars + heartbeats to the  |
-//| signal service on the same server. It contains NO trading code.  |
+//| BarPusher.mq5 — phase 1: hands CLOSED bars + heartbeats to the   |
+//| signal service on the same server. It contains NO trading code   |
+//| and NO network code.                                             |
 //|                                                                  |
-//| Setup: Tools > Options > Expert Advisors > "Allow WebRequest for |
-//| listed URL" → add the ServerUrl below (http://127.0.0.1:8000).  |
+//| Transport: every payload (JSON as in docs/protocol.md §1-2) is   |
+//| written as a file into MQL5\Files\<OutDir>. That folder is a     |
+//| link to /var/spool/signal-mt5, which the service reads           |
+//| (app/spool.py). Files are written as .tmp and then renamed, so   |
+//| the service never sees a half-written file.                      |
+//| Why not WebRequest: MT5 only allows URLs entered by hand in      |
+//| Tools > Options, and a start config resets that list.            |
+//|                                                                  |
 //| Attach to any one chart; it handles all symbols itself.          |
 //+------------------------------------------------------------------+
 #property copyright "Lorant"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
-input string ServerUrl       = "http://127.0.0.1:8000";
-input string IngestToken     = "";                       // same as INGEST_TOKEN in .env
+input string OutDir          = "signal";                 // subfolder of MQL5\Files (the spool link)
 input string SymbolList      = "GER40.cash,UK100.cash,US100.cash,US30.cash";
 input int    BackfillM5      = 2000;                     // bars sent on first start
 input int    BackfillH1      = 500;
 input int    BackfillD1      = 250;
 input int    PollSeconds     = 5;
 input int    HeartbeatSec    = 60;
-input int    HttpTimeoutMs   = 5000;
 
-#define EA_VERSION  "1.00"
+#define EA_VERSION  "1.10"
 #define MAX_BATCH   500
 
 ENUM_TIMEFRAMES g_tfs[3]      = {PERIOD_M5, PERIOD_H1, PERIOD_D1};
@@ -28,14 +33,17 @@ string          g_tfNames[3]  = {"M5", "H1", "D1"};
 string          g_symbols[];
 datetime        g_lastSent[];   // [symbolIndex * 3 + tfIndex], server time of last bar acknowledged
 datetime        g_lastHeartbeat = 0;
+long            g_seq = 0;      // makes file names unique within one run
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   if(IngestToken == "")
+   CloseOlderDuplicateCharts();
+
+   if(!FolderCreate(OutDir))   // true if it exists already (it is a link to the spool dir)
    {
-      Print("BarPusher: IngestToken is empty — set it in the inputs.");
-      return INIT_PARAMETERS_INCORRECT;
+      PrintFormat("BarPusher: cannot use folder MQL5\\Files\\%s, error %d", OutDir, GetLastError());
+      return INIT_FAILED;
    }
 
    int n = StringSplit(SymbolList, ',', g_symbols);
@@ -56,7 +64,7 @@ int OnInit()
    ArrayInitialize(g_lastSent, 0);   // 0 = backfill on first pass; the server upserts, so resends are harmless
 
    EventSetTimer(PollSeconds);
-   PrintFormat("BarPusher %s started for %d symbols → %s", EA_VERSION, n, ServerUrl);
+   PrintFormat("BarPusher %s started for %d symbols, writing to MQL5\\Files\\%s", EA_VERSION, n, OutDir);
    return INIT_SUCCEEDED;
 }
 
@@ -66,6 +74,25 @@ void OnDeinit(const int reason)
 }
 
 void OnTick() {}   // not used; everything runs on the timer
+
+//+------------------------------------------------------------------+
+//| The start config opens a new chart with this EA on every start,  |
+//| and MT5 also restores the previous one. Keep only the newest     |
+//| (highest chart id) chart of this symbol/period; the older one    |
+//| with its EA instance is closed. Never closes other symbols.      |
+//+------------------------------------------------------------------+
+void CloseOlderDuplicateCharts()
+{
+   long me = ChartID();
+   long id = ChartFirst();
+   while(id >= 0)
+   {
+      long next = ChartNext(id);
+      if(id < me && ChartSymbol(id) == _Symbol && ChartPeriod(id) == _Period)
+         ChartClose(id);
+      id = next;
+   }
+}
 
 //+------------------------------------------------------------------+
 void OnTimer()
@@ -121,7 +148,7 @@ void PushNewBars(const int s, const int t)
    {
       int end = MathMin(start + MAX_BATCH, got);
       string json = BuildBarsJson(sym, g_tfNames[t], digits, rates, start, end);
-      if(!PostJson("/v1/bars", json))
+      if(!WriteJson("bars", json))
          return;                                  // keep g_lastSent; resend from here next time
       g_lastSent[key] = rates[end - 1].time;
    }
@@ -181,37 +208,42 @@ bool SendHeartbeat()
    j += ",\"time_server\":" + IntegerToString((long)TimeTradeServer());
    j += ",\"server_utc_offset_sec\":" + IntegerToString(ServerUtcOffsetSec());
    j += "}";
-   return PostJson("/v1/heartbeat", j);
+   return WriteJson("hb", j);
 }
 
 //+------------------------------------------------------------------+
-bool PostJson(const string path, const string json)
+//| Write one payload as <OutDir>\<kind>_<gmt>_<usec>_<n>.json       |
+//| (written as .tmp, then renamed). false = try again next time.    |
+//+------------------------------------------------------------------+
+bool WriteJson(const string kind, const string json)
 {
-   char   body[];
-   char   result[];
-   string respHeaders;
+   g_seq++;
+   string base = StringFormat("%s_%I64d_%06I64d_%06I64d", kind, (long)TimeGMT(),
+                              (long)(GetMicrosecondCount() % 1000000), g_seq % 1000000);
+   string tmp  = OutDir + "\\" + base + ".tmp";
+   string fin  = OutDir + "\\" + base + ".json";
 
-   int len = StringToCharArray(json, body, 0, WHOLE_ARRAY, CP_UTF8);
-   if(len > 0)
-      ArrayResize(body, len - 1);   // drop the trailing \0
-
-   string headers = "Content-Type: application/json\r\n"
-                    "Authorization: Bearer " + IngestToken + "\r\n";
-
+   uchar data[];
+   int len = StringToCharArray(json, data, 0, WHOLE_ARRAY, CP_UTF8) - 1;   // without the \0
    ResetLastError();
-   int code = WebRequest("POST", ServerUrl + path, headers, HttpTimeoutMs, body, result, respHeaders);
-   if(code == -1)
+   int h = FileOpen(tmp, FILE_WRITE | FILE_BIN);
+   if(h == INVALID_HANDLE)
    {
-      int err = GetLastError();
-      if(err == 4014)
-         PrintFormat("BarPusher: WebRequest not allowed for %s — add it under Tools > Options > Expert Advisors.", ServerUrl);
-      else
-         PrintFormat("BarPusher: WebRequest %s failed, error %d", path, err);
+      PrintFormat("BarPusher: cannot create %s, error %d", tmp, GetLastError());
       return false;
    }
-   if(code != 200)
+   uint written = FileWriteArray(h, data, 0, len);
+   FileClose(h);
+   if((int)written != len)
    {
-      PrintFormat("BarPusher: %s → HTTP %d: %s", path, code, CharArrayToString(result, 0, MathMin(ArraySize(result), 300)));
+      PrintFormat("BarPusher: short write on %s (%d of %d bytes)", tmp, written, len);
+      FileDelete(tmp);
+      return false;
+   }
+   if(!FileMove(tmp, 0, fin, FILE_REWRITE))
+   {
+      PrintFormat("BarPusher: cannot rename %s, error %d", tmp, GetLastError());
+      FileDelete(tmp);
       return false;
    }
    return true;

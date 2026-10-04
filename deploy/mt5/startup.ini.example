@@ -11,12 +11,14 @@ NewsEnable=0
 CertInstall=0
 
 [Experts]
-; EAs only run with AllowLiveTrading on. BarPusher contains no order code.
-; The WebRequest allow-list cannot be set here: MT5 stores it encrypted and only takes it from
-; Tools > Options > Expert Advisors (see docs/mt5-linux.md, "One-time GUI settings").
-AllowLiveTrading=1
+; Algorithmic trading OFF (the toolbar "Algo Trading" button is off, and EAs may not trade).
+; BarPusher has no order code and keeps running like this: it only writes files. Tested with
+; MT5 build 6235: heartbeats keep coming and report trade_allowed=false. MT5 applies this
+; section on every start, so a click in the GUI does not survive a restart either. The service
+; alerts in Telegram if a heartbeat ever reports algo trading as on.
+AllowLiveTrading=0
 AllowDllImport=0
-Enabled=1
+Enabled=0
 Account=0
 Profile=0
 

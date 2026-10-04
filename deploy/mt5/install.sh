@@ -3,10 +3,11 @@
 # MT5 still needs a display to run, so it draws on a virtual one (Xvfb :99) nobody looks at.
 # Visibility comes from Telegram: status, alerts and /screenshot of the virtual display.
 #
-# Run as root, once, from the repo:  sudo deploy/mt5/install.sh
-# Read it first. Before running, create these two files next to this script:
-#   startup.ini     (from startup.ini.example — FTMO login, server)
-#   BarPusher.set   (from BarPusher.set.example — INGEST_TOKEN from .env)
+# Run as root, once, from the repo, AFTER deploy/deploy.sh (it creates the user "signal"):
+#   sudo deploy/mt5/install.sh
+# Read it first. Before running, create next to this script:
+#   startup.ini     (from startup.ini.example — FTMO login, password, server; never commit it)
+# Optional: BarPusher.set (EA inputs); without it BarPusher.set.example is used. It holds no secret.
 set -euo pipefail
 
 MT5_USER=mt5
@@ -18,9 +19,9 @@ MT5_DIR="$PREFIX/drive_c/Program Files/MetaTrader 5"
 # watches and wineboot waits for it forever. MT5 needs neither.
 as_mt5() { sudo -u "$MT5_USER" env DISPLAY=:99 WINEPREFIX="$PREFIX" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree,mshtml=" "$@"; }
 
-for f in startup.ini BarPusher.set; do
-  [ -f "$HERE/$f" ] || { echo "Missing $HERE/$f — copy it from $f.example and fill it in."; exit 1; }
-done
+SPOOL=/var/spool/signal-mt5   # the EA writes its files here, the service reads them (app/spool.py)
+[ -f "$HERE/startup.ini" ] || { echo "Missing $HERE/startup.ini — copy it from startup.ini.example and fill it in."; exit 1; }
+PRESET="$HERE/BarPusher.set"; [ -f "$PRESET" ] || PRESET="$HERE/BarPusher.set.example"
 
 echo "== packages =="
 dpkg --add-architecture i386
@@ -60,12 +61,36 @@ for i in $(seq 1 60); do [ -f "$MT5_DIR/terminal64.exe" ] && break; sleep 5; don
 sleep 20
 as_mt5 wineserver -k || true
 
+echo "== FTMO server list =="
+# The generic installer does not know the FTMO servers (login would never start). FTMO's own
+# installer (linked from ftmo.com) ships them in Config/servers.dat: install it once, keep that
+# file, remove the rest.
+FTMO_DIR="$PREFIX/drive_c/Program Files/FTMO Global Markets MT5 Terminal"
+as_mt5 wget -qO "/home/$MT5_USER/ftmo5setup.exe" \
+  https://download.mql5.com/cdn/web/ftmo.global.markets/mt5/ftmo5setup.exe
+as_mt5 wine "/home/$MT5_USER/ftmo5setup.exe" /auto || true
+for i in $(seq 1 60); do [ -f "$FTMO_DIR/Config/servers.dat" ] && break; sleep 5; done
+[ -f "$FTMO_DIR/Config/servers.dat" ] || { echo "FTMO installer did not produce servers.dat"; exit 1; }
+sleep 20
+as_mt5 wineserver -k || true
+install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/Config"
+install -o "$MT5_USER" -g "$MT5_USER" -m 644 "$FTMO_DIR/Config/servers.dat" "$MT5_DIR/Config/servers.dat"
+rm -rf "$FTMO_DIR"
+
+echo "== spool folder (EA -> service) =="
+getent group signal >/dev/null || groupadd --system signal
+# mt5 writes, group signal (the service) reads and deletes; setgid keeps new files in group signal.
+install -d -o "$MT5_USER" -g signal -m 2770 "$SPOOL"
+
 echo "== EA, settings, start config =="
 # MQL5/ only appears after the terminal's first start, so create the folders we need.
-install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/MQL5" "$MT5_DIR/MQL5/Experts" "$MT5_DIR/MQL5/Presets" "$MT5_DIR/config"
+# "Config" with a capital C: that is what the installer uses (Linux is case-sensitive).
+install -d -o "$MT5_USER" -g "$MT5_USER" "$MT5_DIR/MQL5" "$MT5_DIR/MQL5/Experts" "$MT5_DIR/MQL5/Presets" "$MT5_DIR/MQL5/Files" "$MT5_DIR/Config"
+ln -sfn "$SPOOL" "$MT5_DIR/MQL5/Files/signal"
+chown -h "$MT5_USER:$MT5_USER" "$MT5_DIR/MQL5/Files/signal"
 install -o "$MT5_USER" -g "$MT5_USER" -m 644 "$REPO/mt5/BarPusher.mq5" "$MT5_DIR/MQL5/Experts/BarPusher.mq5"
-install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/BarPusher.set" "$MT5_DIR/MQL5/Presets/BarPusher.set"
-install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/startup.ini"   "$MT5_DIR/config/startup.ini"
+install -o "$MT5_USER" -g "$MT5_USER" -m 644 "$PRESET" "$MT5_DIR/MQL5/Presets/BarPusher.set"
+install -o "$MT5_USER" -g "$MT5_USER" -m 600 "$HERE/startup.ini" "$MT5_DIR/Config/startup.ini"
 # Compile headless; MetaEditor writes a log next to the source. It only works with /portable
 # (data folder = the install folder, not AppData), run from the MT5 folder with a RELATIVE path:
 # an absolute path with spaces makes MetaEditor exit silently.
@@ -82,13 +107,13 @@ cp "$HERE"/systemd/mt5-terminal.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now mt5-terminal
 
-# The plaintext copies here are no longer needed.
-shred -u "$HERE/startup.ini" "$HERE/BarPusher.set"
+# The plaintext copy here is no longer needed (the installed one is mode 600, owner mt5).
+shred -u "$HERE/startup.ini"
 
 cat <<EOF
 
 Done. MT5 is starting headless.
  - Logs:        journalctl -u mt5-terminal -f
  - Screenshot:  sudo -u $MT5_USER import -display :99 -window root /tmp/mt5.png
- - Within ~2 minutes the signal service should report the first heartbeat in Telegram.
+ - Within ~2 minutes files appear in $SPOOL and the service reports the first heartbeat.
 EOF

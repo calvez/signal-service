@@ -49,12 +49,19 @@ incus launch images:ubuntu/24.04 trader
 incus config set trader limits.cpu=4 limits.memory=8GiB
 incus config set trader boot.autostart=true
 incus config set trader snapshots.schedule=@daily snapshots.expiry=14d snapshots.pattern="daily-%d"
+# Ubuntu 26.04 (kernel 7.0) AppArmor otherwise blocks signals between processes inside the
+# container: systemd there could not stop Wine/MT5 ("Failed to kill control group: Permission
+# denied"). This allows signals only between processes of this container. Restart to apply.
+incus config set trader raw.apparmor='signal (send) peer="incus-trader_**",'
+incus restart trader
 incus exec trader -- bash -c 'apt update && apt full-upgrade -y && timedatectl set-timezone UTC || true'
 ```
 - No proxy devices, no inbound ports: nothing in the container is reachable from outside.
-- Copy the repo in: `incus file push -r signal-service trader/root/`
+- Copy the repo in: `incus file push -r signal-service trader/root/` (or `tar … | incus exec trader -- tar -x …`)
 - Work inside: `incus exec trader -- bash`, then install Claude Code there and run it in `/root/signal-service`.
-- MT5 under Wine and Xvfb run fine in an unprivileged container; `install.sh` needs no changes.
+- MT5 under Wine and Xvfb run fine in an unprivileged container with the AppArmor rule above.
+- Inside the container, `rsync` hangs on exit on this host; `deploy/deploy.sh` copies with `tar`.
+- Processes started with `incus exec` cannot be killed from another `incus exec` session (same AppArmor mediation). Start long jobs with `systemd-run` inside the container so `systemctl stop` works, or kill them from the host (container UID + 1000000).
 
 ## 5. Snapshot routine
 ```bash

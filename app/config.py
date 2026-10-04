@@ -22,6 +22,7 @@ class Secrets(BaseSettings):
     telegram_chat_id: str = ""
     ingest_token: str = ""
     db_path: str = "data/signal.db"
+    spool_dir: str = "/var/spool/signal-mt5"  # where the EA drops its files (app/spool.py)
     config_path: str = "config.yaml"
 
 

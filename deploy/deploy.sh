@@ -9,8 +9,13 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 DEST=/opt/signal-service
 
-id signal >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/signal --shell /usr/sbin/nologin signal
+getent group signal >/dev/null || groupadd --system signal
+id signal >/dev/null 2>&1 || useradd --system --gid signal --create-home --home-dir /var/lib/signal --shell /usr/sbin/nologin signal
 install -d -o signal -g signal "$DEST" "$DEST/data"
+
+# Spool folder the MT5 EA writes into (app/spool.py). Owner mt5 once MT5 is installed.
+SPOOL_OWNER=root; id mt5 >/dev/null 2>&1 && SPOOL_OWNER=mt5
+install -d -o "$SPOOL_OWNER" -g signal -m 2770 /var/spool/signal-mt5
 
 [ -f "$DEST/.env" ] || { echo "Missing $DEST/.env: copy .env.example there, fill it in, chmod 600."; exit 1; }
 
