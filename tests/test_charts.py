@@ -29,3 +29,20 @@ def test_chart_is_phone_sized_png():
 
 def test_chart_without_setup_or_session():
     assert png_size(render_chart(frame(30), "GER40.cash", "H1", "Europe/Budapest")) == (1080, 1350)
+
+
+def test_chart_with_hourly_ema_line():
+    from app.features import htf_ema_on_ltf
+
+    df = frame()
+    idx = pd.date_range("2026-10-04 00:00", periods=40, freq="1h", tz="UTC")
+    h1 = pd.DataFrame({"o": 24300.0, "h": 24310.0, "l": 24290.0, "c": 24300.0}, index=idx)
+    line = htf_ema_on_ltf(df.index, h1, 20)
+    assert line.notna().any()
+    png = render_chart(df, "GER40.cash", "M5", "Europe/Budapest", htf_ema=line)
+    assert png_size(png) == (1080, 1350)
+    all_nan = pd.Series(float("nan"), index=df.index)
+    assert png_size(render_chart(df, "GER40.cash", "M5", "Europe/Budapest", htf_ema=all_nan)) == (
+        1080,
+        1350,
+    )

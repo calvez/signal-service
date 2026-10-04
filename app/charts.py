@@ -1,7 +1,8 @@
 """PNG charts for Telegram (docs/telegram.md): dark, large labels, 1080x1350 for a phone.
 
-Shows the last N bars, EMA20, the opening range, today's high/low (since the session start)
-and, for a setup, the entry/stop/target lines.
+Shows the last N bars, the EMA20 (solid blue), on M5 also the 60-minute EMA20 (dashed, see
+features.htf_ema_on_ltf), the opening range, today's high/low (since the session start) and,
+for a setup, the entry/stop/target lines.
 """
 
 import io
@@ -17,6 +18,8 @@ from app.features import ema  # noqa: E402
 
 BG, FG, GRID = "#0e1117", "#e6e6e6", "#2a2f3a"
 UP, DOWN = "#26a69a", "#ef5350"
+EMA_COLOUR = "#42a5f5"  # solid blue: EMA20 of the chart's own timeframe
+HTF_EMA_COLOUR = "#e0e0e0"  # dashed: EMA20 of the 60-minute chart, drawn on the 5-minute chart
 STYLE = mpf.make_mpf_style(
     base_mpf_style="nightclouds",
     marketcolors=mpf.make_marketcolors(up=UP, down=DOWN, edge="inherit", wick="inherit"),
@@ -40,12 +43,17 @@ def render_chart(
     height: int = 1350,
     ema_period: int = 20,
     digits: int = 1,
+    htf_ema: pd.Series | None = None,
+    htf_label: str = "H1",
 ) -> bytes:
-    """PNG bytes. `df`: closed bars (o h l c, UTC index) with enough history for the EMA."""
+    """PNG bytes. `df`: closed bars (o h l c, UTC index) with enough history for the EMA.
+    `htf_ema`: optional higher-timeframe EMA aligned to df's index (dashed line)."""
     if df.empty:
         raise ValueError("no bars to draw")
     full = df.copy()
     full["ema"] = ema(full["c"], ema_period)
+    if htf_ema is not None:
+        full["htf_ema"] = htf_ema.reindex(full.index)
     shown = full.tail(bars).copy()
     shown.index = shown.index.tz_convert(tz).tz_localize(None)
     shown = shown.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close"})
@@ -68,6 +76,13 @@ def render_chart(
             (setup["target"], "Target", UP, "-"),
         ]
 
+    plots = [mpf.make_addplot(shown["ema"], color=EMA_COLOUR, width=2.5)]
+    has_htf = "htf_ema" in shown and shown["htf_ema"].notna().any()
+    if has_htf:
+        plots.append(
+            mpf.make_addplot(shown["htf_ema"], color=HTF_EMA_COLOUR, width=2, linestyle="dashed")
+        )
+
     kwargs: dict = {}
     if lines:
         kwargs["hlines"] = dict(
@@ -80,7 +95,7 @@ def render_chart(
         shown,
         type="candle",
         style=STYLE,
-        addplot=[mpf.make_addplot(shown["ema"], color="#ffa726", width=2.5)],
+        addplot=plots,
         figsize=(width / 100, height / 100),
         returnfig=True,
         warn_too_much_data=10_000,
@@ -91,6 +106,14 @@ def render_chart(
     )
     ax = axes[0]
     ax.set_title(f"{symbol}  {tf_label}", color=FG, fontsize=30, loc="left", pad=20)
+    legend = [(f"── EMA{ema_period} {tf_label}", EMA_COLOUR)]
+    if has_htf:
+        legend.append((f"- - EMA{ema_period} {htf_label}", HTF_EMA_COLOUR))
+    for i, (text, colour) in enumerate(legend):
+        ax.text(
+            0.01, 0.98 - 0.05 * i, text, transform=ax.transAxes, color=colour,
+            fontsize=18, va="top", ha="left", fontweight="bold",
+        )  # fmt: skip
     for price, label, colour, _ in lines:
         ax.text(
             0.99, price, f"{label} {price:.{digits}f} ",

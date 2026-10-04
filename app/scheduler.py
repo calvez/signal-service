@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from app import charts, db, outcomes, reports, sessions
+from app import charts, db, features, outcomes, reports, sessions
 from app.config import Settings
 from app.messages import alert_text, feedback_buttons, fmt_time
 from app.status import STALE_SEC, MonitorEngine, Out, in_quiet_hours
@@ -150,14 +150,18 @@ class TelegramService:
         if df.empty:
             return None
         start = None
+        htf_ema = None
         if tf == "M5":
             active = sessions.active_session(self.cfg, int(df.index[-1].timestamp()))
             if active:
                 start = pd.Timestamp(active[1], unit="s", tz="UTC")
+            # The 60-minute EMA20 on the 5-minute chart (dashed), from closed H1 bars only.
+            h1 = db.load_bars(conn, sym, "H1", until, 200)
+            htf_ema = features.htf_ema_on_ltf(df.index, h1, self.cfg.features.ema_period)
         return charts.render_chart(
             df, sym, tf, self.cfg.telegram.display_tz, setup, start,
             self.cfg.features.opening_range_bars, cc.bars, cc.width, cc.height,
-            self.cfg.features.ema_period, db.get_digits(conn, sym) or 1,
+            self.cfg.features.ema_period, db.get_digits(conn, sym) or 1, htf_ema,
         )  # fmt: skip
 
     def cmd_screenshot(self, args) -> Reply:

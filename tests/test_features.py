@@ -279,3 +279,51 @@ def test_day_context_has_no_lookahead():
     future.iloc[40:, future.columns.get_loc("l")] = 1.0
     b = F.day_context(future.iloc[:40], start)
     assert a == b
+
+
+# ---------------------------------------------------------------- 60-minute EMA on the 5-minute chart
+def h1_frame(n=40, start="2026-10-04 00:00"):
+    idx = pd.date_range(start, periods=n, freq="1h", tz="UTC")
+    c = 100 + np.arange(n, dtype=float)
+    return pd.DataFrame({"o": c, "h": c + 1, "l": c - 1, "c": c}, index=idx)
+
+
+def test_htf_ema_uses_only_closed_hourly_bars():
+    h1 = h1_frame()
+    h1_ema = F.ema(h1["c"], 20)
+    m5 = pd.date_range("2026-10-05 10:00", "2026-10-05 11:55", freq="5min", tz="UTC")
+    line = F.htf_ema_on_ltf(m5, h1, 20)
+    # the 10:00 H1 bar closes at 11:00; the 5-minute bar 10:55-11:00 is the first to know it
+    assert (
+        line[pd.Timestamp("2026-10-05 10:50", tz="UTC")]
+        == h1_ema[pd.Timestamp("2026-10-05 09:00", tz="UTC")]
+    )
+    assert (
+        line[pd.Timestamp("2026-10-05 10:55", tz="UTC")]
+        == h1_ema[pd.Timestamp("2026-10-05 10:00", tz="UTC")]
+    )
+    # constant within the hour: a step line
+    assert line["2026-10-05 11:00":"2026-10-05 11:50"].nunique() == 1
+
+
+def test_htf_ema_has_no_lookahead():
+    h1 = h1_frame()
+    m5 = pd.date_range("2026-10-05 10:00", "2026-10-05 11:55", freq="5min", tz="UTC")
+    base = F.htf_ema_on_ltf(m5, h1, 20)
+    wrecked = h1.copy()
+    # The last 5-minute bar (11:55) closes at 12:00, together with the 11:00 hour, so that hour
+    # is legitimately known. Everything from the 12:00 hour on is still forming: change it.
+    wrecked.loc["2026-10-05 12:00":, ["o", "h", "l", "c"]] = 9999.0
+    changed = F.htf_ema_on_ltf(m5, wrecked, 20)
+    pd.testing.assert_series_equal(base, changed)
+    # and changing the 11:00 hour DOES move the last value: the boundary is exact
+    wrecked.loc["2026-10-05 11:00", ["o", "h", "l", "c"]] = 9999.0
+    moved = F.htf_ema_on_ltf(m5, wrecked, 20)
+    assert moved.iloc[-1] != base.iloc[-1] and moved.iloc[:-1].equals(base.iloc[:-1])
+
+
+def test_htf_ema_before_any_closed_hour_is_nan():
+    h1 = h1_frame(n=2, start="2026-10-05 10:00")
+    m5 = pd.date_range("2026-10-05 10:00", periods=3, freq="5min", tz="UTC")
+    assert F.htf_ema_on_ltf(m5, h1, 20).isna().all()
+    assert F.htf_ema_on_ltf(m5, h1.iloc[0:0], 20).isna().all()

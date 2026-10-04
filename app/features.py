@@ -45,6 +45,34 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
 
 
+def htf_ema_on_ltf(
+    ltf_index: pd.DatetimeIndex,
+    htf: pd.DataFrame,
+    period: int = 20,
+    htf_seconds: int = 3600,
+    ltf_seconds: int = 300,
+) -> pd.Series:
+    """The higher timeframe's EMA (e.g. the 60-minute EMA20) as a line on the lower timeframe
+    (e.g. the 5-minute chart), the way Brooks plots it.
+
+    For each lower-timeframe bar the value is the EMA of the newest HIGHER-timeframe bar that
+    had CLOSED by the time this bar closed (open + htf_seconds <= open + ltf_seconds). So the
+    line steps once an hour and never uses a 60-minute bar that is still forming (no lookahead).
+    NaN before the first closed higher-timeframe bar.
+    """
+    if htf.empty or len(ltf_index) == 0:
+        return pd.Series(np.nan, index=ltf_index, dtype=float)
+    known = pd.DataFrame(
+        {
+            "known_at": htf.index + pd.Timedelta(seconds=htf_seconds),
+            "htf_ema": ema(htf["c"], period).to_numpy(),
+        }
+    ).sort_values("known_at")
+    bars = pd.DataFrame({"closes_at": ltf_index + pd.Timedelta(seconds=ltf_seconds)})
+    merged = pd.merge_asof(bars, known, left_on="closes_at", right_on="known_at")
+    return pd.Series(merged["htf_ema"].to_numpy(), index=ltf_index, name="htf_ema")
+
+
 # --------------------------------------------------------------------------- bar types
 def classify_bars(df: pd.DataFrame, atr_s: pd.Series | None = None) -> pd.DataFrame:
     """Per-bar shape columns (all use the bar itself and the previous bar only).
