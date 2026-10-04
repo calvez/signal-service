@@ -127,3 +127,17 @@ Still to do: MT5 install (**ASK**), end-to-end check, restic backups (**ASK** St
 - **Algo trading off:** start config `[Experts] Enabled=0, AllowLiveTrading=0`. Verified: the EA keeps running and heartbeats report `trade_allowed=false`. New red Telegram alert if a heartbeat ever reports it on.
 - Verified live: EA 1.10 heartbeats and the full backfill arrive through the spool, nothing rejected, one GER40 chart left.
 - `docs/protocol.md` §0, `docs/mt5-linux.md` and `docs/server-setup.md` updated. **`CLAUDE.md` still shows `POST /v1/…` from the EA in its architecture diagram; it is read-only for me, so Lorant should update that line.**
+
+### T10 status (2026-10-04 05:45 UTC)
+Verified live in the container:
+- MT5 (Wine 10.0, build 6235) logged in to FTMO-Demo, €160k Free Trial 2-Step; EA 1.10 delivers heartbeats and bars through the spool; algo trading off (`trade_allowed=false`); MT5's MCP server off.
+- `systemctl restart mt5-terminal`: heartbeats back after ~20 s, still one GER40 chart, settings kept.
+- `/status` and the EU brief render from live data (example: GER40 H1 bull, D1 bear → conflict, so reads would be skipped).
+- `/screenshot` through the sudo rule works for user `signal`; any other `systemctl` call is refused.
+- Snapshots: `before-mt5-install` (30 d), `mt5-working-2` (60 d), daily snapshots running. One `incus snapshot create` hung once in Incus (killed the client; the retry took a second).
+Still open:
+- **Reboot test** of the host (it ends this SSH session, so Lorant runs it or approves it explicitly).
+- **Backups** (restic to a Hetzner Storage Box): needs the Storage Box details from Lorant.
+- **Server time:** offset +3 h matches `ny_plus_7`; re-run `scripts/check_server_time.py` between 25 Oct and 1 Nov 2026 to rule out Athens/Nicosia.
+- First real session on Monday 2026-10-05 (EU 09:00 Berlin): watch reads, alerts and the session wrap.
+- Rotate the secrets that were pasted into the chat (OpenRouter key, Telegram bot token, FTMO trial password).
