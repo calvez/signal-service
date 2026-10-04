@@ -45,10 +45,15 @@ class Strategy(Protocol):
         ...
 
 
-def get_strategy(name: str) -> Strategy:
+def get_strategy(name: str, cfg=None) -> Strategy:
+    """`cfg`: the AppConfig (strategies take their inputs from it)."""
+    from app.strategies.brooks_h2 import BrooksH2
     from app.strategies.demo import DemoStrategy
 
-    registry: dict[str, type] = {"demo": DemoStrategy}
-    if name not in registry:
-        raise KeyError(f"unknown strategy {name!r}; known: {', '.join(sorted(registry))}")
-    return registry[name]()
+    if name == "demo":
+        return DemoStrategy()
+    if name == "brooks_h2":
+        from app.config import BrooksCfg
+
+        return BrooksH2(cfg.brooks if cfg is not None else BrooksCfg())
+    raise KeyError(f"unknown strategy {name!r}; known: brooks_h2, demo")

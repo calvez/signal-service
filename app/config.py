@@ -46,6 +46,8 @@ class SessionCfg(_Strict):
 
 
 class RulesCfg(_Strict):
+    # His H1/D1 rule: no setups when H1 and D1 disagree. Switchable for backtests.
+    require_htf_alignment: bool = True
     max_trades_per_day: int
     cooldown_after_win_min: int
     htf_neutral_counts_as_conflict: bool
@@ -133,6 +135,58 @@ class ManagementCfg(_Strict):
     max_leverage: float = 20.0
 
 
+class BrooksCfg(_Strict):
+    """Inputs of docs/spec-brooks-ea.md (Lorant's spec). Section numbers in the comments.
+    Defaults are the spec's; values marked GAP were not in the spec (docs/strategy.md)."""
+
+    # §2 context filter
+    ema_slope_bars: int = 5
+    allow_h1: bool = False
+    max_pullback_bars: int = 10
+    ema_touch_avg_range: float = 0.5  # GAP: "pullback to around EMA20" = low within this x AvgRange
+    range_lookback: int = 10
+    range_overlap_count: int = 6
+    consec_opp_bars: int = 3
+    min_target_r: float = 2.0
+    # GAP: the high the pullback started from is the high an H2 is expected to break (Brooks'
+    # first target). true = it does not count as "in the way" for the room-to-target check.
+    room_ignores_pullback_high: bool = False
+    # §1/§3 signal bar
+    avg_range_bars: int = 20
+    sb_body_min: float = 0.5
+    sb_close_pos_min: float = 0.75
+    sb_tail_max: float = 0.15
+    min_sb_range_pts: float = 0.0  # GAP: no value in the spec; 0 = off until the backtest says
+    max_sb_range_avg: float = 1.5
+    max_spread_sb_range: float = 0.15
+    # §4 entry orders and timing
+    max_pending_bars: int = 1
+    max_campaigns_per_day: int = 3
+    skip_open_bars: int = 3
+    no_new_order_mins: int = 30
+    # §5 invalidation
+    trade_failed_setups: bool = False
+    early_exit_on_strong_opp: bool = False
+    # §6/§7 risk and management
+    risk_per_trade_pct: float = 0.3  # Lorant: 0.3 %
+    use_be: bool = True
+    be_at_r: float = 1.0
+    max_bars_in_trade: int = 6
+    time_exit_min_r: float = 0.5
+    flatten_mins: int = 15
+    daily_loss_limit_pct: float = 4.0  # GAP: "below FTMO's" (5 %)
+    commission_pts: float = 0.0  # GAP: FTMO index CFDs, to verify in MT5
+    # §8 pyramiding and dynamic stop
+    enable_pyramiding: bool = True
+    add_min_r: float = 1.0
+    max_adds: int = 2
+    add_size_factors: list[float] = [0.5, 0.25]
+    climax_mult: float = 2.5
+    swing_confirm_bars: int = 2
+    # §10 backtest variant: trail (A/B) or fixed_tp (C, 2R take profit, no pyramiding)
+    exit_mode: Literal["trail", "fixed_tp"] = "trail"
+
+
 class EngineCfg(_Strict):
     # Python strategy that evaluates each bar (app/strategies). Empty: no strategy yet, the LLM
     # reads the chart itself (prompt v2). Set: Python proposes candidates, the LLM only
@@ -156,6 +210,7 @@ class AppConfig(_Strict):
     monitors: MonitorsCfg
     engine: EngineCfg = EngineCfg()
     management: ManagementCfg = ManagementCfg()
+    brooks: BrooksCfg = BrooksCfg()
 
     @field_validator("server_time_mode")
     @classmethod

@@ -125,8 +125,8 @@ def check_setup(
     """
     out = out or Outcome()
 
-    # 3. his H1/D1 rule is decided by code, whatever the model says
-    if exp.htf_alignment == "conflict":
+    # 3. his H1/D1 rule is decided by code, whatever the model says (switchable for backtests)
+    if exp.htf_alignment == "conflict" and rules.require_htf_alignment:
         out.notes.append("htf_conflict")
         out.summary = "forced none: H1/D1 conflict"
         return out

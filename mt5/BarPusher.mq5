@@ -1,7 +1,9 @@
 //+------------------------------------------------------------------+
-//| BarPusher.mq5 — phase 1: hands CLOSED bars + heartbeats to the   |
-//| signal service on the same server. It contains NO trading code   |
-//| and NO network code.                                             |
+//| BarPusher.mq5 — hands CLOSED bars + heartbeats to the signal     |
+//| service on the same server, and (TradeAgent.mqh, 2.x) executes   |
+//| the service's orders behind hard locks: only with AllowTrading,  |
+//| only for the logins in TradeLogins, only its own Magic. With the |
+//| default inputs it never trades. No network code.                 |
 //|                                                                  |
 //| Transport: every payload (JSON as in docs/protocol.md §1-2) is   |
 //| written as a file into MQL5\Files\<OutDir>. That folder is a     |
@@ -14,7 +16,7 @@
 //| Attach to any one chart; it handles all symbols itself.          |
 //+------------------------------------------------------------------+
 #property copyright "Lorant"
-#property version   "1.10"
+#property version   "2.00"
 #property strict
 
 input string OutDir          = "signal";                 // subfolder of MQL5\Files (the spool link)
@@ -25,7 +27,7 @@ input int    BackfillD1      = 250;
 input int    PollSeconds     = 5;
 input int    HeartbeatSec    = 60;
 
-#define EA_VERSION  "1.10"
+#define EA_VERSION  "2.00"
 #define MAX_BATCH   500
 
 ENUM_TIMEFRAMES g_tfs[3]      = {PERIOD_M5, PERIOD_H1, PERIOD_D1};
@@ -34,6 +36,8 @@ string          g_symbols[];
 datetime        g_lastSent[];   // [symbolIndex * 3 + tfIndex], server time of last bar acknowledged
 datetime        g_lastHeartbeat = 0;
 long            g_seq = 0;      // makes file names unique within one run
+
+#include "TradeAgent.mqh"
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -63,6 +67,7 @@ int OnInit()
    ArrayResize(g_lastSent, n * 3);
    ArrayInitialize(g_lastSent, 0);   // 0 = backfill on first pass; the server upserts, so resends are harmless
 
+   TradeAgentInit();
    EventSetTimer(PollSeconds);
    PrintFormat("BarPusher %s started for %d symbols, writing to MQL5\\Files\\%s", EA_VERSION, n, OutDir);
    return INIT_SUCCEEDED;
@@ -106,6 +111,8 @@ void OnTimer()
       if(SendHeartbeat())
          g_lastHeartbeat = TimeLocal();
    }
+
+   TradeAgentTick();
 }
 
 //+------------------------------------------------------------------+
@@ -194,7 +201,7 @@ bool SendHeartbeat()
    j += ",\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2);
    j += ",\"connected\":" + (TerminalInfoInteger(TERMINAL_CONNECTED) ? "true" : "false");
    j += ",\"trade_allowed\":" + (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "true" : "false");
-   // Read-only position summary for Telegram status. No order functions are used anywhere.
+   // Position summary of the whole account (manual and EA trades) for /status.
    int    posCount = PositionsTotal();
    double floating = 0.0;
    for(int i = 0; i < posCount; i++)

@@ -40,7 +40,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_settings().config
-    strategy = get_strategy(args.strategy)
+    strategy = get_strategy(args.strategy, cfg)
     symbols = (
         args.symbols.split(",")
         if args.symbols

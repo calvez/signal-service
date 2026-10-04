@@ -391,6 +391,8 @@ def compute_features(
 ) -> pd.DataFrame:
     """All per-bar feature columns in one frame (ema, atr, bar shapes, swings, leg counts)."""
     out = df[["o", "h", "l", "c"]].copy()
+    if "sp" in df:
+        out["sp"] = df["sp"]  # spread in points, as MT5 recorded it for the bar
     out["ema"] = ema(df["c"], ema_period)
     out["atr"] = atr(df, atr_period)
     shapes = classify_bars(df, out["atr"])

@@ -326,7 +326,7 @@ def candidates_text(setups: list[dict], ev) -> str:
 def _run_engine(settings, llm, conn, ev, values, now) -> ReadResult:
     """Python evaluates (strategy candidates), the LLM recommends take / watch / skip."""
     cfg = settings.config
-    strategy = get_strategy(cfg.engine.strategy)
+    strategy = get_strategy(cfg.engine.strategy, cfg)
     exp = ev.expected()
     setups = []
     for cand in strategy.candidates(ev):

@@ -268,7 +268,7 @@ class OneLong:
 
 def engine(settings, monkeypatch, strategy, content):
     settings.config.engine.strategy = "testrule"
-    monkeypatch.setattr("app.reader.get_strategy", lambda name: strategy)
+    monkeypatch.setattr("app.reader.get_strategy", lambda *a: strategy)
     llm, fake = make(settings, FakeOpenRouter())
     fake.content = content
     return llm, fake

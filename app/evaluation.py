@@ -44,6 +44,7 @@ class Evaluation:
     session: str
     session_tz: str
     session_start: int
+    session_end: int
     bar_open: int  # UTC epoch, open time of the evaluated (closed) M5 bar
     bar_index: int  # 1 = first bar of the session
     digits: int
@@ -97,7 +98,7 @@ def evaluate_bar(
     active = sessions.active_session(cfg, bar_open)
     if active is None or active[0] != sym.session:
         raise Skip("outside_session")
-    session, session_start, _ = active
+    session, session_start, session_end = active
 
     bar_ts = pd.Timestamp(bar_open, unit="s", tz="UTC")
     m5 = m5[m5.index <= bar_ts].tail(M5_WINDOW)
@@ -114,7 +115,7 @@ def evaluate_bar(
     h1 = _htf(h1_win, htf.H1_SEC, closes, fc, htf_cache)
     d1 = _htf(d1_win, htf.D1_SEC, closes, fc, htf_cache)
     alignment = htf.alignment(h1.state, d1.state, cfg.rules.htf_neutral_counts_as_conflict)
-    if alignment == "conflict":
+    if alignment == "conflict" and cfg.rules.require_htf_alignment:
         raise Skip(f"htf_conflict (H1 {h1.state}, D1 {d1.state})")
 
     # ---- features on the M5 window
@@ -143,6 +144,7 @@ def evaluate_bar(
 
     return Evaluation(
         symbol=symbol, session=session, session_tz=stz, session_start=session_start,
+        session_end=session_end,
         bar_open=bar_open, bar_index=sessions.bar_index_in_session(cfg, session, bar_open),
         digits=digits, feats=feats, atr=atr_now, last_close=float(feats["c"].iloc[-1]),
         h1=h1, d1=d1, alignment=alignment, ctx=ctx, hint=hint, h1_ema=h1_ema,

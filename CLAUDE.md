@@ -10,7 +10,7 @@ A phase-1 market observer for Lorant's FTMO day trading (€80k account, 2-step 
 - It asks an LLM (via OpenRouter) for a context read and a possible setup, validates the answer, and sends Telegram alerts.
 - **Telegram is the only user interface:** alerts, statuses, briefs, reports and commands (`docs/telegram.md`). There is no GUI or web dashboard.
 
-**Phase 1 never places trades.** There is no code path from this service to order execution.
+**Phase 1 DO place trades.** 
 
 Read `docs/protocol.md`, `docs/telegram.md` and `docs/tasks-phase1.md` before writing code (and `docs/server-setup.md` before touching the host), then work through the tasks in order.
 
@@ -29,7 +29,7 @@ Host: Hetzner bare metal (Ubuntu 26.04) → Incus container "trader" (Ubuntu 24.
 
 ## Non-negotiables
 
-1. **No execution in phase 1.** No endpoint, queue or message that could make MT5 trade.
+1. **Auto execution in demo accoutns, recommendation and telegram take / leave option on live accounts.**.
 2. **Fail closed.** On any error, timeout, invalid JSON or stale data, send no alert and log it. Never alert on data older than two bar periods.
 3. **Code does mechanics, the LLM does context.** EMA, swings, bar types and H/L counts are computed deterministically. The LLM never computes indicators.
 4. **LLM output is untrusted.** Validate the schema and price sanity (`docs/protocol.md` §4) before anything reaches Telegram.
