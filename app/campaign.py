@@ -19,11 +19,14 @@ from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
+from app.advisor import DecisionPoint, Option
+
 M5_SEC = 300
 
 # exit reasons (§9)
 SL, BE, TIME, TRAIL, EOS, DAILY_LIMIT = "SL", "BE", "TIME", "TRAIL", "EOS", "DAILY_LIMIT"
 FAILED_SETUP, ALWAYS_IN_FLIP, TP = "FAILED_SETUP", "ALWAYS_IN_FLIP", "TP"
+AI_EXIT, AI_PARTIAL = "AI_EXIT", "AI_PARTIAL"  # the advisor closed early (all / adds only)
 # cancel reasons (§9)
 SB_LOW_BROKEN, EXPIRED = "SB_LOW_BROKEN", "EXPIRED"
 
@@ -90,6 +93,9 @@ class Campaign:
     evidence: dict = field(default_factory=dict)
     log: list[tuple[int, str]] = field(default_factory=list)
     live: bool = False  # live: MT5 reports the real exits; backtest: book at the given price
+    opp_streak: int = 0  # consecutive closed bars against the position
+    peak_open_r: float = 0.0  # best OPEN result of the whole campaign, in R
+    ai: list[dict] = field(default_factory=list)  # every advisor decision, for the log
     _seq: int = 0
 
     # ------------------------------------------------------------------ helpers
@@ -197,12 +203,22 @@ class Campaign:
 
     # ------------------------------------------------------------------ bar close
     def on_bar_close(
-        self, bar: pd.Series, t_close: int, ev, strategy, cfg, flat_due, adds_allowed: bool = True
+        self,
+        bar: pd.Series,
+        t_close: int,
+        ev,
+        strategy,
+        cfg,
+        flat_due,
+        adds_allowed: bool = True,
+        advisor=None,
     ) -> list[Action]:
         """Decisions at the close of one M5 bar (§5, §7, §8). `bar`: the closed bar with
         feature columns (o h l c ema atr ... last_sl_price last_sh_price); `ev`: its Evaluation
         (for the context filter of adds; None if it could not be evaluated); `flat_due`: the
-        flatten time (True / "EOS") or the daily loss guard ("DAILY_LIMIT") has been reached."""
+        flatten time (True / "EOS") or the daily loss guard ("DAILY_LIMIT") has been reached.
+        `advisor`: optional AI judgement at three points (app/advisor.py). It runs only AFTER
+        every hard rule and may only reduce risk: exit early, tighten a stop, veto an add."""
         acts: list[Action] = []
         s = self.sign
 
@@ -225,6 +241,9 @@ class Campaign:
         for p in self.positions:
             p.best = max(p.best, s * ((hi if s > 0 else lo) - p.entry))
         self.bars_in_trade += 1
+        open_r = sum(s * (c - p.entry) * p.size for p in self.positions) / self.r_pts
+        self.peak_open_r = max(self.peak_open_r, open_r)
+        self.opp_streak = self.opp_streak + 1 if s * (c - float(bar["o"])) < 0 else 0
 
         # end of session or daily limit: close everything (§7)
         if flat_due:
@@ -280,6 +299,35 @@ class Campaign:
         if self.bars_in_trade >= cfg.max_bars_in_trade and self.max_r < cfg.time_exit_min_r:
             return acts + [self._close_all_action(t_close, TIME, c)]
 
+        # ---- AI exit point: the hard rules kept us in, but something looks wrong
+        if advisor is not None and cfg.ai_exit:
+            trig = self._exit_triggers(bar, c, open_r, strong_opp, cfg)
+            if trig:
+                point = DecisionPoint(
+                    kind="exit",
+                    triggers=trig,
+                    options=[
+                        Option("hold", "hold the whole position and keep managing it by the rules"),
+                        Option("close_all", f"close the whole position now at about {c}"),
+                        Option(
+                            "close_adds",
+                            f"close the add-ons now at about {c}, keep the first position",
+                        ),
+                    ],
+                    rule_choice="hold",
+                    safe_choice="hold",
+                )
+                choice = self._ask(advisor, point, ev, t_close)
+                if choice == "close_all":
+                    return acts + [self._close_all_action(t_close, AI_EXIT, c)]
+                if choice == "close_adds" and self.adds:
+                    for p in [x for x in self.positions if x.kind == "add"]:
+                        self._book(p, c, t_close, AI_PARTIAL)
+                    acts.append(Action("close_adds", reason=AI_PARTIAL))
+                    if not self.positions:
+                        self._finish(t_close, AI_PARTIAL)
+                        return acts
+
         # §8.4 dynamic stop: one modification per bar for all tickets
         new_sl = self._stop_update(bar, c, cfg)
         if new_sl:
@@ -287,11 +335,109 @@ class Campaign:
                 next(p for p in self.positions if p.id == pid).sl = v
             acts.append(Action("modify_sl", sl=new_sl))
 
-        # §8 add-ons
+        # ---- AI tighten point: well in profit but the stop is still far behind
+        if advisor is not None and cfg.ai_tighten and not new_sl:
+            tighter = self._tighten_options(bar, c, open_r, cfg)
+            if tighter:
+                point = DecisionPoint(
+                    kind="tighten",
+                    triggers=[
+                        f"open {open_r:+.2f}R, peak {self.peak_open_r:+.2f}R, "
+                        f"stop {abs(c - self.positions[0].sl) / self.r_pts:.2f}R behind the price"
+                    ],
+                    options=[Option("keep", "leave the stops where the rules put them"), *tighter],
+                    rule_choice="keep",
+                    safe_choice="keep",
+                )
+                choice = self._ask(advisor, point, ev, t_close)
+                chosen = point.option(choice)
+                if chosen is not None and chosen.sl is not None:
+                    moved = {}
+                    for p in self.positions:
+                        if s * (chosen.sl - p.sl) > 0 and s * (c - chosen.sl) > 0:
+                            p.sl = chosen.sl
+                            moved[p.id] = chosen.sl
+                    if moved:
+                        acts.append(Action("modify_sl", sl=moved, reason="ai_tighten"))
+
+        # §8 add-ons (the rules propose, the advisor may veto)
         add = self._maybe_add(bar, c, t_close, ev, strategy, cfg) if adds_allowed else None
+        if add is not None and advisor is not None and cfg.ai_add:
+            o = add.order
+            point = DecisionPoint(
+                kind="add",
+                triggers=[
+                    f"the rules allow add #{self.adds + 1}: stop order at {o.price}, "
+                    f"stop {o.sl}, size {o.size:g}x the first position"
+                ],
+                options=[
+                    Option("take", f"place the add-on stop order at {o.price}"),
+                    Option("skip", "no add-on on this bar"),
+                ],
+                rule_choice="take",
+                safe_choice="skip",
+            )
+            if self._ask(advisor, point, ev, t_close) != "take":
+                self.orders.remove(o)
+                self.log.append((t_close, "add vetoed by the advisor"))
+                add = None
         if add is not None:
             acts.append(add)
         return acts
+
+    # ------------------------------------------------------------------ advisor
+    def _ask(self, advisor, point: "DecisionPoint", ev, t: int) -> str:
+        choice, reason = advisor.decide(point, self, ev)
+        if point.option(choice) is None:
+            choice, reason = point.safe_choice, f"unknown option {choice!r}: safe choice"
+        self.ai.append({"t": t, "point": point.kind, "triggers": point.triggers,
+                        "rule_choice": point.rule_choice, "choice": choice, "reason": reason,
+                        "advisor": getattr(advisor, "name", "?")})  # fmt: skip
+        if choice != point.rule_choice:
+            self.log.append((t, f"advisor {point.kind}: {choice} (rules: {point.rule_choice})"))
+        return choice
+
+    def _exit_triggers(self, bar, c: float, open_r: float, strong_opp: bool, cfg) -> list[str]:
+        """Why a human would look up from the chart now. Empty = nothing to judge."""
+        s, out = self.sign, []
+        if strong_opp:
+            out.append(f"strong bar against the position, closed at {c}")
+        if self.opp_streak >= 2:
+            out.append(f"{self.opp_streak} bars in a row closed against the position")
+        rng = float(bar["h"]) - float(bar["l"])
+        avg = float(bar.get("avg_range", float("nan")))
+        with_trend = s * (c - float(bar["o"])) > 0
+        if with_trend and pd.notna(avg) and avg > 0 and rng > cfg.climax_mult * avg:
+            out.append(f"climax bar in the trend direction: range {rng / avg:.1f}x the average")
+        if self.peak_open_r >= 1.0 and self.peak_open_r - open_r >= cfg.ai_give_back_r:
+            out.append(f"given back {self.peak_open_r - open_r:.2f}R from the peak "
+                       f"({self.peak_open_r:+.2f}R to {open_r:+.2f}R)")  # fmt: skip
+        return out
+
+    def _tighten_options(self, bar, c: float, open_r: float, cfg) -> list["Option"]:
+        """Stops the advisor may move to. Only ever in the trade's direction and never through
+        the price, so choosing one can only reduce risk."""
+        s = self.sign
+        if open_r < cfg.ai_tighten_min_r or not self.positions:
+            return []
+        widest = min((p.sl for p in self.positions), key=lambda x: s * x)
+        if abs(c - widest) / self.r_pts < cfg.ai_tighten_gap_r:
+            return []
+        out = []
+        lvl = float(bar["l"]) if s > 0 else float(bar["h"])
+        candidates = {
+            "tighten_bar": (
+                lvl - s * self.tick,
+                "below this bar's low" if s > 0 else "above this bar's high",
+            ),
+            "tighten_half": ((c + widest) / 2, "half way between the price and the current stop"),
+        }
+        for oid, (level, text) in candidates.items():
+            if s * (level - widest) > 0 and s * (c - level) > 0:
+                out.append(
+                    Option(oid, f"move all stops to {round(level, 10)} ({text})", round(level, 10))
+                )
+        return out
 
     # ------------------------------------------------------------------ internals
     def _stop_update(self, bar: pd.Series, c: float, cfg) -> dict:

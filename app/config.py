@@ -190,6 +190,15 @@ class BrooksCfg(_Strict):
     swing_confirm_bars: int = 2
     # §10 backtest variant: trail (A/B) or fixed_tp (C, 2R take profit, no pyramiding)
     exit_mode: Literal["trail", "fixed_tp"] = "trail"
+    # AI trade management (app/advisor.py). Only has an effect when an advisor is supplied.
+    # The AI may only REDUCE risk: exit early, tighten a stop, veto an add. The hard rules
+    # (stop, breakeven, trailing, flip, session flatten, daily guard) always run first.
+    ai_exit: bool = True  # ask when warning signs appear
+    ai_tighten: bool = True  # ask when the stop is far behind a profitable trade
+    ai_add: bool = True  # ask before every add the rules allow
+    ai_give_back_r: float = 1.0  # exit trigger: given back this much R from the peak
+    ai_tighten_min_r: float = 1.0  # tighten point: at least this much open profit
+    ai_tighten_gap_r: float = 1.5  # ... and the stop at least this far behind the price
 
 
 class EngineCfg(_Strict):

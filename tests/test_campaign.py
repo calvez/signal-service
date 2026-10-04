@@ -313,3 +313,126 @@ def test_driver_runs_a_campaign_end_to_end(settings, tmp_path):
     df = bt.campaign_rows(res.campaigns, 0.3)
     s = bt.stats(df, cfg)
     assert s["entered"] == 1 and "worst_day_pct" in s and s["max_loss_breached"] is False
+
+
+# ------------------------------------------------------------------ AI trade management
+class Fixed:
+    """Advisor stub: always answers `choice`, and records what it was asked."""
+
+    name = "stub"
+
+    def __init__(self, choice):
+        self.choice = choice
+        self.points = []
+
+    def decide(self, point, campaign, ev):
+        self.points.append(point)
+        return self.choice, "stub"
+
+
+def running(cfg=CFG):
+    """A campaign that is open, +1R, with the stop at breakeven."""
+    c, _ = start(cfg=cfg)
+    fill_now(c)
+    c.on_bar_close(bar(100, 110.5, 99, 108), T + 600, None, NoContext(), cfg, None)
+    return c
+
+
+def test_advisor_is_only_asked_after_the_hard_rules():
+    """A hard rule (always-in flip) closes the trade without consulting the advisor."""
+    c = running()
+    adv = Fixed("hold")
+    c.on_bar_close(bar(104, 104.5, 95, 95.5, ema=97), T + 900, None, NoContext(), CFG, None,
+                   advisor=adv)  # fmt: skip
+    assert c.exit_reason == "ALWAYS_IN_FLIP" and adv.points == []
+
+
+def test_advisor_can_close_early_on_a_warning_sign():
+    c = running()
+    adv = Fixed("close_all")
+    # strong bar against us, but above the EMA: no hard rule fires
+    c.on_bar_close(bar(108, 108.5, 103, 103.5, ema=95), T + 900, None, NoContext(), CFG, None,
+                   advisor=adv)  # fmt: skip
+    assert c.exit_reason == "AI_EXIT" and c.status == "closed"
+    (p,) = adv.points
+    assert p.kind == "exit" and p.rule_choice == "hold" and p.safe_choice == "hold"
+    assert any("strong bar against" in t for t in p.triggers)
+    assert c.ai[-1]["choice"] == "close_all" and c.ai[-1]["rule_choice"] == "hold"
+
+
+def test_advisor_hold_keeps_the_spec_behaviour():
+    c = running()
+    c.on_bar_close(bar(108, 108.5, 103, 103.5, ema=95), T + 900, None, NoContext(), CFG, None,
+                   advisor=Fixed("hold"))  # fmt: skip
+    assert c.status == "open" and c.exit_reason is None
+
+
+def test_invalid_advisor_answer_falls_back_to_the_safe_choice():
+    c = running()
+    c.on_bar_close(bar(108, 108.5, 103, 103.5, ema=95), T + 900, None, NoContext(), CFG, None,
+                   advisor=Fixed("sell_everything_now"))  # fmt: skip
+    assert c.status == "open" and c.ai[-1]["choice"] == "hold"
+
+
+def test_advisor_can_close_only_the_add_ons():
+    c = running()
+    sig = {"entry": 116.0, "stop": 104.9, "pullback_low": 105.0}
+    c.on_bar_close(bar(108, 111, 104, 110), T + 900, object(), Adds(sig), CFG, None)
+    c.on_fill(c.orders[0].id, 116.0, T + 1000, CFG)
+    assert c.adds == 1 and len(c.positions) == 2
+    c.on_bar_close(bar(116, 116.5, 111, 111.5, ema=95), T + 1200, None, NoContext(), CFG, None,
+                   advisor=Fixed("close_adds"))  # fmt: skip
+    assert len(c.positions) == 1 and c.positions[0].kind == "entry" and c.status == "open"
+    assert c.closed[-1]["reason"] == "AI_PARTIAL"
+
+
+def test_advisor_can_veto_an_add():
+    c = running()
+    adv = Fixed("skip")
+    sig = {"entry": 116.0, "stop": 104.9, "pullback_low": 105.0}
+    acts = c.on_bar_close(bar(108, 111, 104, 110), T + 900, object(), Adds(sig), CFG, None,
+                          advisor=adv)  # fmt: skip
+    assert not [a for a in acts if a.kind == "place"] and not c.orders
+    assert [p.kind for p in adv.points] == ["add"] and adv.points[0].rule_choice == "take"
+    assert adv.points[0].safe_choice == "skip"  # an AI failure never adds risk
+
+
+def test_advisor_approving_an_add_matches_the_rules():
+    c = running()
+    sig = {"entry": 116.0, "stop": 104.9, "pullback_low": 105.0}
+    acts = c.on_bar_close(bar(108, 111, 104, 110), T + 900, object(), Adds(sig), CFG, None,
+                          advisor=Fixed("take"))  # fmt: skip
+    assert [a.kind for a in acts if a.kind == "place"] == ["place"]
+
+
+def test_advisor_tighten_only_moves_the_stop_forward():
+    cfg = CFG.model_copy(update={"ai_tighten_gap_r": 0.5})
+    c, _ = start(cfg=cfg)
+    fill_now(c)
+    c.on_bar_close(bar(100, 110.5, 99, 108), T + 600, None, NoContext(), cfg, None)  # BE at 100
+    adv = Fixed("tighten_bar")
+    # +1.15R open, stop still 1.15R behind the price -> a tighten point is offered
+    c.on_bar_close(bar(108, 112, 106, 111.5), T + 900, None, NoContext(), cfg, None, advisor=adv)
+    (p,) = [x for x in adv.points if x.kind == "tighten"]
+    assert p.rule_choice == "keep" and p.safe_choice == "keep"
+    assert c.positions[0].sl == pytest.approx(105.9)  # bar low 106 - 1 tick, above the old 100
+    # a later bar cannot move it back
+    c.on_bar_close(bar(108, 109, 101, 108.5), T + 1200, None, NoContext(), cfg, None,
+                   advisor=Fixed("tighten_bar"))  # fmt: skip
+    assert c.positions[0].sl >= 105.9
+
+
+def test_no_tighten_point_when_the_stop_is_already_close():
+    cfg = CFG.model_copy(update={"ai_tighten_gap_r": 5.0})
+    c = running(cfg)
+    adv = Fixed("keep")
+    c.on_bar_close(bar(108, 109, 107, 108.5), T + 900, None, NoContext(), cfg, None, advisor=adv)
+    assert not [x for x in adv.points if x.kind == "tighten"]
+
+
+def test_give_back_trigger():
+    c = running()
+    adv = Fixed("hold")
+    c.on_bar_close(bar(108, 125, 107, 124), T + 900, None, NoContext(), CFG, None, advisor=adv)
+    c.on_bar_close(bar(124, 124.5, 112, 113), T + 1200, None, NoContext(), CFG, None, advisor=adv)
+    assert any("given back" in t for p in adv.points for t in p.triggers)
