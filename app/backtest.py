@@ -26,7 +26,7 @@ import pandas as pd
 
 from app import db, sessions
 from app.config import AppConfig
-from app.evaluation import M5_WINDOW, Skip, evaluate_bar
+from app.evaluation import D1_WINDOW, H1_WINDOW, M5_WINDOW, Skip, evaluate_bar
 from app.outcomes import simulate
 from app.validate import check_setup
 
@@ -102,8 +102,11 @@ def run(
     digits = db.get_digits(conn, symbol) or 2
     point = 10**-digits
     m5_times = m5.index.as_unit("s").asi8  # epoch seconds, whatever unit pandas stored
+    h1_times = h1.index.as_unit("s").asi8
+    d1_times = d1.index.as_unit("s").asi8
 
     trades: list[Trade] = []
+    htf_cache: dict = {}
     skips: Counter = Counter()
     evaluated = 0
     busy_until = 0  # his rules: no new entry while a position is open
@@ -115,10 +118,15 @@ def run(
         hi = int(np.searchsorted(m5_times, min(win_end, end_utc), side="left"))
         for i in range(lo, hi):
             t = int(m5_times[i])
+            window = m5.iloc[max(0, i - M5_WINDOW + 1) : i + 1]
+            # Hand over only the higher-timeframe bars evaluate_bar can use (it still filters
+            # them itself); just a speed-up over passing the whole history every time.
+            j = int(np.searchsorted(h1_times, t + M5_SEC, side="right"))
+            k = int(np.searchsorted(d1_times, t + M5_SEC, side="right"))
+            h1_win = h1.iloc[max(0, j - H1_WINDOW - 1) : j]
+            d1_win = d1.iloc[max(0, k - D1_WINDOW - 1) : k]
             try:
-                ev = evaluate_bar(
-                    cfg, symbol, t, m5.iloc[max(0, i - M5_WINDOW + 1) : i + 1], h1, d1, digits
-                )
+                ev = evaluate_bar(cfg, symbol, t, window, h1_win, d1_win, digits, htf_cache)
             except Skip as skip:
                 skips[str(skip).split(" ")[0]] += 1
                 continue

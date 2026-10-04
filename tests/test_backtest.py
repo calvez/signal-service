@@ -174,3 +174,22 @@ def test_import_file_round_trip(tmp_path, monkeypatch):
         1791100800, "ny_plus_7"
     )
     assert db.get_digits(conn, "GER40.cash") == 2
+
+
+def test_htf_cache_gives_the_same_evaluation(settings, hist):
+    from app.evaluation import Skip, evaluate_bar
+
+    m5 = db.load_bars(hist, SYMBOL, "M5", until_utc=BAR + 3600, limit=2000)
+    h1 = db.load_bars(hist, SYMBOL, "H1", until_utc=BAR + 3600, limit=2000)
+    d1 = db.load_bars(hist, SYMBOL, "D1", until_utc=BAR + 3600, limit=2000)
+    cache: dict = {}
+    for t in range(BAR - 1800, BAR + 1800, 300):
+        try:
+            plain = evaluate_bar(settings.config, SYMBOL, t, m5, h1, d1, 1)
+        except Skip as skip:
+            with pytest.raises(Skip, match=str(skip).split(" ")[0]):
+                evaluate_bar(settings.config, SYMBOL, t, m5, h1, d1, 1, cache)
+            continue
+        cached = evaluate_bar(settings.config, SYMBOL, t, m5, h1, d1, 1, cache)
+        assert (plain.h1, plain.d1, plain.alignment) == (cached.h1, cached.d1, cached.alignment)
+    assert cache  # it was used

@@ -141,3 +141,13 @@ Still open:
 - **Server time:** offset +3 h matches `ny_plus_7`; re-run `scripts/check_server_time.py` between 25 Oct and 1 Nov 2026 to rule out Athens/Nicosia.
 - First real session on Monday 2026-10-05 (EU 09:00 Berlin): watch reads, alerts and the session wrap.
 - Rotate the secrets that were pasted into the chat (OpenRouter key, Telegram bot token, FTMO trial password).
+
+## Backtest and LLM preparation (2026-10-04) — direction from Lorant
+"Python evaluates, the LLM makes the recommendation." The first strategy is Lorant's choice (next step). Prepared:
+- **History:** `deploy/mt5/history-dump.sh` + `mt5/HistoryDump.mq5` exported everything FTMO provides: M1/M5/H1/D1 from 2017-12-28 (US30 from 2019-02-08) to 2026-10-02, 14.7 M bars, imported into `data/history.db` (739 MB, separate from the live DB, not backed up, can be re-downloaded).
+- **Shared evaluation:** `app/evaluation.py` (`evaluate_bar`) is used by both the live reader and the backtester, same windows, no lookahead.
+- **Strategy slot:** `app/strategies` (`Candidate`, `Strategy`, `get_strategy`). Only `demo` exists (plumbing test, not a trading idea).
+- **Backtester:** `app/backtest.py`, `scripts/backtest.py`: session bars only, H1/D1 gate, `check_setup`, outcomes on M1, spread charged in R, his trade rules (or `--all-signals`), in/out-of-sample split, CSV. Speed: ~14 s per symbol and 4 months (a full 9-year run over 4 symbols ≈ 25 min). Further speed-up possible by vectorising the swing detection.
+- **LLM on top of Python:** `engine.strategy` in `config.yaml` (empty = off = today's behaviour). When set: no candidate → no LLM call; otherwise prompt v3 with the evaluation and numbered candidates, answer `take | watch | skip` (schema 2, `validate_recommendation`); prices always from Python.
+- Guide: `docs/backtest.md`.
+- Observation from the smoke test (GER40, Jun–Sep 2026): the H1/D1 gate with "neutral counts as conflict" blocked 72% of session bars. Worth deciding deliberately when the strategy is chosen.

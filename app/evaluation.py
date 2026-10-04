@@ -24,6 +24,16 @@ D1_WINDOW = 150
 MIN_HISTORY_BARS = 60  # EMA/ATR/swings need warm-up
 
 
+def _htf(bars: pd.DataFrame, tf_sec: int, closes: pd.Timestamp, fc, cache: dict | None):
+    if cache is None:
+        return htf.htf_state(bars, tf_sec, closes, fc.ema_period, fc.swing_confirm_bars)
+    closed = bars[bars.index + pd.Timedelta(seconds=tf_sec) <= closes]
+    key = (tf_sec, closed.index[-1] if len(closed) else None, len(closed))
+    if key not in cache:
+        cache[key] = htf.htf_state(closed, tf_sec, closes, fc.ema_period, fc.swing_confirm_bars)
+    return cache[key]
+
+
 class Skip(Exception):
     """This bar is not evaluated; the message is the reason (logged, never alerted)."""
 
@@ -73,8 +83,14 @@ def evaluate_bar(
     h1_bars: pd.DataFrame,
     d1_bars: pd.DataFrame,
     digits: int,
+    htf_cache: dict | None = None,
 ) -> Evaluation:
-    """Evaluate the closed M5 bar opening at `bar_open` (UTC). Bars after it are ignored."""
+    """Evaluate the closed M5 bar opening at `bar_open` (UTC). Bars after it are ignored.
+
+    `htf_cache`: optional dict the backtester passes in. The H1/D1 state can only change when
+    a higher-timeframe bar closes, so it is cached per (timeframe, newest closed bar). Same
+    result as without the cache; only faster.
+    """
     sym = cfg.symbols.get(symbol)
     if sym is None or sym.role != "traded":
         raise Skip("not_traded")
@@ -95,8 +111,8 @@ def evaluate_bar(
     fc = cfg.features
     h1_win = h1_bars[h1_bars.index <= closes].tail(H1_WINDOW)
     d1_win = d1_bars[d1_bars.index <= closes].tail(D1_WINDOW)
-    h1 = htf.htf_state(h1_win, htf.H1_SEC, closes, fc.ema_period, fc.swing_confirm_bars)
-    d1 = htf.htf_state(d1_win, htf.D1_SEC, closes, fc.ema_period, fc.swing_confirm_bars)
+    h1 = _htf(h1_win, htf.H1_SEC, closes, fc, htf_cache)
+    d1 = _htf(d1_win, htf.D1_SEC, closes, fc, htf_cache)
     alignment = htf.alignment(h1.state, d1.state, cfg.rules.htf_neutral_counts_as_conflict)
     if alignment == "conflict":
         raise Skip(f"htf_conflict (H1 {h1.state}, D1 {d1.state})")
