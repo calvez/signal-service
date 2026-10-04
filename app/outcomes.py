@@ -103,6 +103,30 @@ def _horizon(cfg: AppConfig, session: str, signal_open: int) -> int:
     return sessions.cash_close_utc(cfg, session, sessions.local_date(cfg, session, signal_open))
 
 
+def _pyramid_outcome(conn, cfg: AppConfig, r, setup: dict, horizon: int, now: int) -> Outcome:
+    """Play the alert as a pyramiding position (app/position.py) and report it in the same
+    terms as before: stopped with a profit = win, stopped at a loss or flat = loss,
+    still open at the cash close = expired."""
+    from app import features
+    from app.position import PyramidRules, simulate_position
+
+    mg = cfg.management
+    t = r["bar_time_utc"]
+    hist = db.load_bars_between(conn, r["symbol"], "M5", t - 600 * M5_SEC, horizon)
+    after = hist[hist.index >= pd.Timestamp(t + M5_SEC, unit="s", tz="UTC")]
+    last = features.last_swings(features.confirmed_swings(hist, cfg.features.swing_confirm_bars))
+    col = "last_sl_price" if setup["direction"] == "long" else "last_sh_price"
+    levels = pd.Series(last[col].to_numpy(), index=hist.index + pd.Timedelta(seconds=M5_SEC))
+    tick = 10 ** -(db.get_digits(conn, r["symbol"]) or 1)
+    rules = PyramidRules(mg.risk_pct, mg.max_adds, mg.add_every_r, mg.add_size,
+                         mg.max_open_risk_r, mg.trail)  # fmt: skip
+    p = simulate_position(setup, t, after, horizon, rules, tick, levels, now)
+    if p.status in ("pending", "no_entry"):
+        return Outcome(p.status, None, p.entry_t, None)
+    status = "expired" if p.status == "closed_eod" else ("win" if p.r > 0 else "loss")
+    return Outcome(status, p.r, p.entry_t, p.exit_t)
+
+
 def update_outcomes(conn: sqlite3.Connection, cfg: AppConfig, now: int | None = None) -> int:
     """Simulate every alert/watch that has no final outcome yet. Returns how many changed."""
     now = int(time.time()) if now is None else now
@@ -114,8 +138,12 @@ def update_outcomes(conn: sqlite3.Connection, cfg: AppConfig, now: int | None = 
     changed = 0
     for r in rows:
         horizon = _horizon(cfg, r["session"], r["bar_time_utc"])
-        bars = db.load_bars_between(conn, r["symbol"], "M5", r["bar_time_utc"], horizon)
-        out = simulate(json.loads(r["setup"]), r["bar_time_utc"], bars, horizon, now)
+        setup = json.loads(r["setup"])
+        if cfg.management.mode == "pyramid" or setup.get("target") is None:
+            out = _pyramid_outcome(conn, cfg, r, setup, horizon, now)
+        else:
+            bars = db.load_bars_between(conn, r["symbol"], "M5", r["bar_time_utc"], horizon)
+            out = simulate(setup, r["bar_time_utc"], bars, horizon, now)
         with conn:
             conn.execute(
                 "INSERT INTO outcomes (read_id, status, r, entry_t, exit_t, updated_at) "

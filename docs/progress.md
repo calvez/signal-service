@@ -151,3 +151,11 @@ Still open:
 - **LLM on top of Python:** `engine.strategy` in `config.yaml` (empty = off = today's behaviour). When set: no candidate → no LLM call; otherwise prompt v3 with the evaluation and numbered candidates, answer `take | watch | skip` (schema 2, `validate_recommendation`); prices always from Python.
 - Guide: `docs/backtest.md`.
 - Observation from the smoke test (GER40, Jun–Sep 2026): the H1/D1 gate with "neutral counts as conflict" blocked 72% of session bars. Worth deciding deliberately when the strategy is chosen.
+
+### Trade management: pyramiding (from Lorant, 2026-10-04)
+"No profit target; pyramiding: add to a runner and raise the size; move the stops as the exposure grows; risk within the FTMO rules."
+- `app/position.py` + `management:` in config.yaml (mode `pyramid`, default). Placeholder numbers until Lorant sets them: first unit 0.5 % = 1R, add 1× every +1R, max 2 adds, stop after each add so the whole position risks 0R (breakeven), trail behind confirmed M5 swings, flat at the cash close.
+- Backtester plays positions this way; results in R and % of the account, W/S/L, top-5 share, FTMO check (worst day, max drawdown, breaches). `check_setup` accepts candidates without a target.
+- Live alerts show the pyramid plan; live hypothetical outcomes use the same simulator.
+- Smoke test (demo strategy, GER40, Jun–Sep 2026): 55 trades, W/S/L 4/29/22, best +11.3R, 1.8 units on average, worst day −1.58 %, max DD 8.18 %. Meaningless as a strategy result; it shows the mechanics and that a runner system depends on a few big trades.
+- Not built yet: live management alerts (Telegram "add now / move stop to …" while a position runs).

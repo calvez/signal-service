@@ -60,7 +60,11 @@ def main() -> int:
     print(f"strategy {strategy.name} v{strategy.version} · {args.start} .. {args.end} · "
           f"{'all signals' if args.all_signals else 'his trade rules'} · "
           f"{'M5' if args.no_m1 else 'M1'} outcomes · SIMULATED, net of spread")  # fmt: skip
-    print(backtest.report(trades, epoch(args.split) if args.split else None))
+    mg = cfg.management
+    print(f"management: {mg.mode} · first unit risks {mg.risk_pct}% = 1R · "
+          f"up to {mg.max_adds} adds every {mg.add_every_r}R · stop keeps open risk <= "
+          f"{mg.max_open_risk_r}R after adds · trail {mg.trail}")  # fmt: skip
+    print(backtest.report(trades, epoch(args.split) if args.split else None, cfg.ftmo))
     out = Path(args.out or f"data/backtests/{strategy.name}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
     backtest.to_frame(trades).to_csv(out, index=False)

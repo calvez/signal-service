@@ -23,7 +23,7 @@ class Candidate:
     direction: str  # long | short
     entry: float  # stop-order entry
     stop: float
-    target: float
+    target: float | None  # None = runner without a fixed target (management.mode pyramid)
     with_trend: bool
     grade: str = "A"  # A | B: how clean the strategy rates it
     evidence: dict = field(default_factory=dict)  # what the rule saw (logged, shown to the LLM)

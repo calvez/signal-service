@@ -72,3 +72,14 @@ engine:
   # setups while the LLM recommends take / watch / skip with engine.prompt_version.
   strategy: ""
   prompt_version: "v3"
+
+management:
+  # How a position is played after the entry (app/position.py). Lorant: no fixed target,
+  # pyramiding into runners, stop follows the growing exposure. Placeholder numbers: to be set.
+  mode: "pyramid"          # pyramid | fixed_target (target from the setup, old behaviour)
+  risk_pct: 0.5            # first unit risks 0.5% of the initial balance = 1R (EUR 800 on 160k)
+  max_adds: 2              # at most 2 more units
+  add_every_r: 1.0         # add one unit each time price runs another +1R from the first entry
+  add_size: 1.0            # each add = 1x the first unit
+  max_open_risk_r: 0.0     # after an add the stop moves so the whole position cannot lose (0R)
+  trail: "swing"           # also trail behind the last confirmed M5 swing (or "none")

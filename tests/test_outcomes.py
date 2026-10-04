@@ -106,6 +106,7 @@ def make_read(settings, **kw):
 
 
 def test_update_outcomes_stores_and_finalises(settings):
+    settings.config.management.mode = "fixed_target"  # this test is about fixed targets
     rid = make_read(settings)
     cfg = settings.config
     c = db.connect(settings.db_path)
@@ -131,6 +132,7 @@ def test_none_reads_have_no_outcome(settings):
 
 
 def test_summary_and_his_picks(settings):
+    settings.config.management.mode = "fixed_target"  # this test is about fixed targets
     db.init_db(settings.db_path)
     win = seed_read(settings, bar=S)
     loss = seed_read(settings, bar=S + 1800)
@@ -164,6 +166,7 @@ def test_reports_show_simulated_numbers(settings):
 
 # ------------------------------------------------------------------ CSV
 def test_csv_export_has_everything_needed_for_analysis(settings, tmp_path):
+    settings.config.management.mode = "fixed_target"  # this test is about fixed targets
     db.init_db(settings.db_path)
     rid = seed_read(settings, bar=S)
     put_bars(settings, [(24330, 24310), (24380, 24340)])
@@ -241,3 +244,16 @@ def test_m1_bars_inside_the_signal_bar_are_ignored():
     after = m1([(99, 95)] * 15 + [(99, 95)])
     r = simulate(LONG, S, pd.concat([inside, after]), FAR, S + 4000, bar_seconds=60)
     assert r.status == "no_entry"
+
+
+def test_pyramid_outcome_for_a_live_alert(settings):
+    """Default mode: the alert is played as a runner (adds at +1R, +2R; stop to breakeven)."""
+    assert settings.config.management.mode == "pyramid"
+    rid = make_read(settings)  # long 24325, stop 24298 (1R = 27)
+    # entry, +1R (24352) add, +2R (24379) add, then back to the breakeven stop
+    put_bars(settings, [(24330, 24310), (24355, 24330), (24382, 24360), (24383, 24300)])
+    c = db.connect(settings.db_path)
+    outcomes.update_outcomes(c, settings.config, S + 4000)
+    status, r = c.execute("SELECT status, r FROM outcomes WHERE read_id = ?", (rid,)).fetchone()
+    assert status == "loss" and r == pytest.approx(0.0, abs=0.01)  # stopped flat
+    c.close()

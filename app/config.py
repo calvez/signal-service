@@ -116,6 +116,18 @@ class MonitorsCfg(_Strict):
     disk_min_free_pct: int
 
 
+class ManagementCfg(_Strict):
+    """How a position is managed after the entry (app/position.py)."""
+
+    mode: Literal["pyramid", "fixed_target"] = "pyramid"
+    risk_pct: float = 0.5  # % of the initial balance risked by the first unit (= 1R)
+    max_adds: int = 2
+    add_every_r: float = 1.0
+    add_size: float = 1.0
+    max_open_risk_r: float = 0.0  # after an add the whole position risks at most this
+    trail: Literal["swing", "none"] = "swing"
+
+
 class EngineCfg(_Strict):
     # Python strategy that evaluates each bar (app/strategies). Empty: no strategy yet, the LLM
     # reads the chart itself (prompt v2). Set: Python proposes candidates, the LLM only
@@ -138,6 +150,7 @@ class AppConfig(_Strict):
     ftmo: FtmoCfg
     monitors: MonitorsCfg
     engine: EngineCfg = EngineCfg()
+    management: ManagementCfg = ManagementCfg()
 
     @field_validator("server_time_mode")
     @classmethod

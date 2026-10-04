@@ -297,6 +297,7 @@ def test_feedback_from_other_chat_is_rejected(tg, settings):
 
 # ------------------------------------------------------------------ sending reads
 def test_alert_is_sent_once_with_sound_and_buttons(tg, settings):
+    settings.config.management.mode = "fixed_target"
     svc, fake = tg
     rid = seed_read(settings)
     assert svc.send_pending_reads(NOW) == 1
@@ -363,3 +364,11 @@ def test_http_libraries_never_log_request_urls(caplog):
     with caplog.at_level(logging.INFO):
         api.send_message(CHAT, "hello")
     assert TOKEN not in caplog.text and "SECRET-TOKEN" not in caplog.text
+
+
+def test_runner_alert_shows_the_pyramid_plan(tg, settings):
+    svc, fake = tg
+    seed_read(settings)  # long 24325, stop 24298 -> 1R = 27 points
+    svc.send_pending_reads(NOW)
+    text = fake.sent()[0]["text"]
+    assert "Target runner · add at 24352.0, 24379.0 · after each add stop to breakeven" in text

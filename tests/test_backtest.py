@@ -60,6 +60,7 @@ def run(settings, conn, strategy, **kw):
 
 
 def test_signal_is_validated_simulated_and_charged_spread(settings, hist):
+    settings.config.management.mode = "fixed_target"
     res = run(settings, hist, FixedStrategy())
     (tr,) = res.trades
     assert tr.status == "win" and tr.validation == "ok"
@@ -102,6 +103,48 @@ def test_bad_candidates_are_rejected_not_traded(settings, hist):
     assert tr.status == "rejected" and tr.r_net is None and tr.validation.startswith("rejected")
 
 
+def test_pyramid_mode_plays_a_runner(settings, hist):
+    class Runner(FixedStrategy):
+        def candidates(self, ev):
+            self.seen.append(ev.bar_open)
+            if ev.bar_open != self.at:
+                return []
+            entry = round(ev.last_close + 1, 1)
+            return [Candidate("H2", "long", entry, round(entry - ev.atr, 1), None, True)]
+
+    assert settings.config.management.mode == "pyramid"
+    for k in range(40):  # a clean staircase after the signal: rising highs AND lows
+        low = 24125 + 30 * k
+        hist.execute("UPDATE bars SET o = ?, h = ?, l = ?, c = ? WHERE tf = 'M5' AND t_utc = ?",
+                     (low + 5, low + 40, low, low + 35, BAR + 300 * (k + 1)))  # fmt: skip
+    hist.commit()
+    (tr,) = run(settings, hist, Runner()).trades
+    # the bars after BAR jump far up: entry, both adds, held to the end of the data / close
+    assert tr.target is None and tr.units == 3 and tr.status in ("closed_eod", "stopped")
+    assert tr.r_net > 2 and tr.result_pct == pytest.approx(tr.r_net * 0.5, abs=1e-3)
+    assert tr.cost_r == pytest.approx(round(0.1 * 3 / abs(tr.entry - tr.stop), 3))  # per unit
+    s = backtest.stats([tr], settings.config.ftmo)
+    assert s["worst_day_pct"] > 0 and s["daily_limit_breaches"] == 0 and s["avg_units"] == 3
+    assert "FTMO check" in backtest.report([tr], None, settings.config.ftmo)
+
+
+def test_ftmo_breach_detection():
+    from app.config import FtmoCfg
+
+    ftmo = FtmoCfg(initial_balance=160000, daily_loss_pct=5, max_loss_pct=10,
+                   day_reset_tz="Europe/Prague", warn_levels_pct=[50, 80])  # fmt: skip
+
+    def t(pct, day_offset):
+        ts = 1791100800 + day_offset * 86400
+        return backtest.Trade("S", "eu", ts, "x:1", "H2", "long", True, "A", 1, 0, None, "ok",
+                              "stopped", r_gross=pct / 0.5, cost_r=0.0, r_net=pct / 0.5,
+                              result_pct=pct, units=1, exit_utc=ts)  # fmt: skip
+
+    s = backtest.stats([t(-3.0, 0), t(-2.5, 0), t(-1.0, 1), t(-4.0, 2), t(-0.5, 3)], ftmo)
+    assert s["worst_day_pct"] == -5.5 and s["daily_limit_breaches"] == 1
+    assert s["max_drawdown_pct"] == 11.0 and s["max_loss_breached"] is True
+
+
 def test_his_rules_block_overlapping_trades(settings, hist):
     class Twice(FixedStrategy):
         def candidates(self, ev):
@@ -126,6 +169,7 @@ def test_stats_and_report():
     trades = [t(2.0), t(-1.0, "loss"), t(-1.0, "loss"), t(2.0)]
     s = backtest.stats(trades)
     assert (s["entered"], s["win_rate"], s["total_r"], s["expectancy_r"]) == (4, 0.5, 2.0, 0.5)
+    assert (s["win"], s["loss"]) == (2, 2)
     assert s["profit_factor"] == 2.0 and s["max_drawdown_r"] == 2.0
     assert "ALL" in backtest.report(trades) and "OUT-OF-SAMPLE" in backtest.report(trades, 1)
 

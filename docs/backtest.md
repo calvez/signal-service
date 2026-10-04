@@ -64,7 +64,26 @@ class H2Pullback:
 Register it in `get_strategy()` (`app/strategies/__init__.py`) and add unit tests on hand-built bars, like the features.
 The example above is only an illustration of the interface, not a chosen strategy. `demo` exists only to test the plumbing.
 
-## 3. Running a backtest
+## 3. Trade management: pyramiding runners (`management:` in config.yaml)
+
+Lorant's style: no fixed profit target. When a trade becomes a runner, add to it; the stop follows the growing exposure. `app/position.py` plays every position like that (`mode: pyramid`, the default; `fixed_target` keeps the old stop-or-target simulation):
+
+| Setting | Meaning | Placeholder |
+|---|---|---|
+| `risk_pct` | the first unit risks this % of the initial balance = **1R** | 0.5 (= EUR 800 on 160k) |
+| `add_every_r` | add one unit each time price runs another +X R from the first entry | 1.0 |
+| `max_adds` | at most this many adds | 2 |
+| `add_size` | size of each add, × the first unit | 1.0 |
+| `max_open_risk_r` | after each add the common stop moves so the WHOLE position risks at most this; 0 = breakeven, negative = locks in profit | 0.0 |
+| `trail` | also trail behind the last confirmed M5 swing low/high | swing |
+
+Exit: the stop, or flat at the cash close. Inside a bar the worse case comes first (stop before add; an add whose raised stop is also reached in that bar is stopped out). A candidate may have `target=None` (runner); `check_setup` then skips the reward/risk rule. Results are in R of the first unit's risk and in % of the account; spread is charged per unit.
+
+The backtest report shows W/S/L (win > +0.25R, scratch within ±0.25R — typically stopped at breakeven after an add — loss < −0.25R), the share of the gross profit made by the 5 best trades (runner systems live from a few big trades), and an **FTMO check**: worst FTMO day vs. the −5 % daily limit and max drawdown vs. the −10 % limit, in % of the initial balance.
+
+Live: an alert without a fixed target shows the plan ("Target runner · add at …, … · after each add stop to breakeven, trail swings"), and the hypothetical outcomes in `/today` and the reports are played the same way.
+
+## 4. Running a backtest
 
 ```bash
 cd /opt/signal-service
@@ -81,7 +100,7 @@ sudo -u signal .venv/bin/python scripts/backtest.py --strategy h2_pullback \
 
 Reading the numbers: choose rules on the in-sample period only and look at the out-of-sample result once at the end. A rule that only works in-sample is curve-fitted. Few trades (< ~100) say little.
 
-## 4. Switching the live system to "Python evaluates, LLM recommends"
+## 5. Switching the live system to "Python evaluates, LLM recommends"
 
 In `/opt/signal-service/config.yaml`:
 

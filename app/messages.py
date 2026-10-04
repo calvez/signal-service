@@ -48,8 +48,8 @@ def alert_text(read: sqlite3.Row, cfg: AppConfig, digits: int = 1) -> str:
     is_watch = read["action"] == "watch"
     mark = "👀" if is_watch else ("🟢" if long else "🔴")
     word = f"WATCH {setup['direction'].upper()}" if is_watch else setup["direction"].upper()
-    entry, stop, target = setup["entry"], setup["stop"], setup["target"]
-    risk, reward = abs(entry - stop), abs(target - entry)
+    entry, stop, target = setup["entry"], setup["stop"], setup.get("target")
+    risk = abs(entry - stop)
     atr = read["atr"]
     atr_txt = f", {risk / atr:.1f} ATR" if atr else ""
     lines = [
@@ -57,13 +57,26 @@ def alert_text(read: sqlite3.Row, cfg: AppConfig, digits: int = 1) -> str:
         context_line(context, read["htf_alignment"]),
         f"Entry  {entry:.{d}f} ({'buy' if long else 'sell'} stop)",
         f"Stop   {stop:.{d}f}  ({risk:.{d}f} pts{atr_txt})",
-        f"Target {target:.{d}f}  ({reward / risk:.1f}R)",
+        target_line(cfg, entry, risk, target, long, d),
         f"Why: {read['reason']}",
         f"Model: {read['model']} · prompt {read['prompt_version']} · read #{read['id']}",
     ]
     if read["validation"] != "ok":
         lines.append(f"Note: {read['validation'].removeprefix('ok: ')}")
     return "\n".join(lines)
+
+
+def target_line(cfg: AppConfig, entry: float, risk: float, target, long: bool, d: int) -> str:
+    """Fixed target, or the pyramiding plan for a runner (management in config.yaml)."""
+    mg = cfg.management
+    if target is not None and mg.mode == "fixed_target":
+        return f"Target {target:.{d}f}  ({abs(target - entry) / risk:.1f}R)"
+    sign = 1 if long else -1
+    adds = ", ".join(f"{entry + sign * k * mg.add_every_r * risk:.{d}f}"
+                     for k in range(1, mg.max_adds + 1))  # fmt: skip
+    stop_rule = "breakeven" if mg.max_open_risk_r == 0 else f"max {mg.max_open_risk_r:g}R open risk"
+    return (f"Target runner · add at {adds} · after each add stop to {stop_rule}"
+            f"{', trail swings' if mg.trail == 'swing' else ''}")  # fmt: skip
 
 
 def feedback_buttons(read_id: int, chosen: str | None = None) -> dict:

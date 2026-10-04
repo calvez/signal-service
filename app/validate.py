@@ -133,20 +133,23 @@ def check_setup(
 
     # 10. round first, so every check below sees the prices that would be shown
     digits = exp.digits
+    # A missing target is allowed: pyramiding runners have no fixed target (app/position.py).
     try:
-        entry, stop, target = (round(float(setup[k]), digits) for k in ("entry", "stop", "target"))
+        entry, stop = (round(float(setup[k]), digits) for k in ("entry", "stop"))
+        target = None if setup.get("target") is None else round(float(setup["target"]), digits)
     except (KeyError, TypeError, ValueError):
         return _reject(out, "setup without valid entry/stop/target")
-    if not all(math.isfinite(x) and x > 0 for x in (entry, stop, target)):
+    if not all(math.isfinite(x) and x > 0 for x in (entry, stop, *([target] if target else []))):
         return _reject(out, "non-finite or non-positive price")
     if not (math.isfinite(exp.atr) and exp.atr > 0):
         return _reject(out, "ATR unavailable")
 
     # 4. price order
     direction = setup.get("direction")
-    if direction == "long" and not stop < entry < target:
+    far = target if target is not None else entry + (1 if direction == "long" else -1)
+    if direction == "long" and not stop < entry < far:
         return _reject(out, "long needs stop < entry < target")
-    if direction == "short" and not target < entry < stop:
+    if direction == "short" and not far < entry < stop:
         return _reject(out, "short needs target < entry < stop")
     if direction not in ("long", "short"):
         return _reject(out, "direction must be long or short")
@@ -160,8 +163,8 @@ def check_setup(
     if abs(entry - exp.last_close) > rules.entry_max_atr_from_close * exp.atr:
         return _reject(out, "entry too far from the last close")
 
-    # 7. reward to risk
-    if abs(target - entry) / risk < rules.min_reward_risk:
+    # 7. reward to risk (only with a fixed target)
+    if target is not None and abs(target - entry) / risk < rules.min_reward_risk:
         return _reject(out, "reward/risk below minimum")
 
     out.setup = {**setup, "entry": entry, "stop": stop, "target": target}
