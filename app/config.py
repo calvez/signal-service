@@ -141,6 +141,11 @@ class BrooksCfg(_Strict):
 
     # §2 context filter
     ema_slope_bars: int = 5
+    # Lorant (2026-10-04): "the two EMAs are relevant" — the M5 EMA20 and the 60-minute EMA20.
+    # price_above: long only with the close above BOTH EMAs (short: below both)
+    # ema_order:   M5 EMA20 above the 60-minute EMA20 (short: below)
+    # both:        price_above and ema_order;  off: only the M5 EMA20 (the spec as written)
+    htf_ema_filter: Literal["price_above", "ema_order", "both", "off"] = "price_above"
     allow_h1: bool = False
     max_pullback_bars: int = 10
     ema_touch_avg_range: float = 0.5  # GAP: "pullback to around EMA20" = low within this x AvgRange

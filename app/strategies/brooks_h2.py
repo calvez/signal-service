@@ -89,17 +89,35 @@ def signal_bar(v: View, cfg, point: float) -> tuple[bool, dict]:
 
 
 # --------------------------------------------------------------------------- §2 context
-def trend(v: View, cfg) -> tuple[bool, dict]:
-    """Close above EMA20, EMA20 rising over ema_slope_bars, last swing high > previous one."""
+def two_emas(close: float, ema_m5: float, ema_h1: float | None, mode: str) -> tuple[bool, dict]:
+    """Lorant's two EMAs (in the view's prices, i.e. already mirrored for shorts):
+    price_above = close above the M5 AND the 60-minute EMA20; ema_order = M5 EMA20 above the
+    60-minute EMA20; both = both; off = no 60-minute condition. No 60-minute EMA yet -> fails
+    (fail closed), unless mode is off."""
+    if mode == "off":
+        return True, {}
+    if ema_h1 is None or np.isnan(ema_h1):
+        return False, {"h1_ema": None}
+    above = close > ema_h1
+    order = ema_m5 > ema_h1
+    ok = {"price_above": above, "ema_order": order, "both": above and order}[mode]
+    return bool(ok), {"above_h1_ema": bool(above), "m5_ema_above_h1_ema": bool(order)}
+
+
+def trend(v: View, cfg, ema_h1: float | None = None) -> tuple[bool, dict]:
+    """Close above EMA20, EMA20 rising over ema_slope_bars, last swing high > previous one, and
+    the 60-minute EMA20 condition (htf_ema_filter). `ema_h1` is in the view's prices."""
     b = v.bars
     highs = b["sh_price"].dropna().to_numpy()
     rising = (
         len(b) > cfg.ema_slope_bars and b["ema"].iloc[-1] > b["ema"].iloc[-1 - cfg.ema_slope_bars]
     )
     hh = len(highs) >= 2 and highs[-1] > highs[-2]
-    ok = b["c"].iloc[-1] > b["ema"].iloc[-1] and rising and hh
-    return bool(ok), {"above_ema": bool(b["c"].iloc[-1] > b["ema"].iloc[-1]),
-                      "ema_rising": bool(rising), "higher_high": bool(hh)}  # fmt: skip
+    close, ema = float(b["c"].iloc[-1]), float(b["ema"].iloc[-1])
+    ok_h1, h1m = two_emas(close, ema, ema_h1, cfg.htf_ema_filter)
+    ok = close > ema and rising and hh and ok_h1
+    details = {"above_ema": close > ema, "ema_rising": bool(rising), "higher_high": bool(hh)}
+    return bool(ok), {**details, **h1m}
 
 
 @dataclass(frozen=True)
@@ -225,6 +243,10 @@ class BrooksH2:
     def __init__(self, cfg):
         self.cfg = cfg  # config.brooks
 
+    @staticmethod
+    def h1_ema_in_view(ev, v: View) -> float | None:
+        return None if ev.h1_ema is None else v.sign * ev.h1_ema
+
     def view(self, ev, direction: str) -> View:
         tick = 10**-ev.digits
         if direction == "long":
@@ -250,7 +272,7 @@ class BrooksH2:
         ev_ = {"direction": direction}
         ok_sb, sbm = signal_bar(v, cfg, point)
         ev_["signal_bar"] = sbm
-        ok_trend, tm = trend(v, cfg)
+        ok_trend, tm = trend(v, cfg, self.h1_ema_in_view(ev, v))
         ev_["trend"] = tm
         ok_type, kind = setup_type(v, cfg)
         ev_["setup"] = kind
@@ -287,7 +309,10 @@ class BrooksH2:
         cfg = self.cfg
         v = self.view(ev, direction)
         point = 10**-ev.digits
-        if not (trend(v, cfg)[0] and not_trading_range(v, cfg)[0] and no_always_in_flip(v, cfg)[0]):
+        h1 = self.h1_ema_in_view(ev, v)
+        if not (
+            trend(v, cfg, h1)[0] and not_trading_range(v, cfg)[0] and no_always_in_flip(v, cfg)[0]
+        ):
             return None
         if not signal_bar(v, cfg, point)[0]:
             return None

@@ -17,6 +17,9 @@ rules:
   max_trades_per_day: 3
   cooldown_after_win_min: 30
   htf_neutral_counts_as_conflict: true
+  # His H1/D1 rule. Lorant 2026-10-04: off — entries are on the 5-minute chart; the 60-minute
+  # EMA20 is used instead (brooks.htf_ema_filter).
+  require_htf_alignment: false
   min_reward_risk: 1.0
   stop_atr_min: 0.3
   stop_atr_max: 3.0

@@ -7,6 +7,7 @@ from app.config import AppConfig
 from app.validate import Expected, validate_read
 
 RULES = AppConfig.model_validate(yaml.safe_load(open("config.example.yaml"))).rules
+HTF_RULES = RULES.model_copy(update={"require_htf_alignment": True})  # his H1/D1 rule switched on
 BAR = "2026-10-05T07:25:00Z"
 SETUP = {
     "direction": "long", "type": "H2", "with_trend": True, "entry_type": "stop",
@@ -85,8 +86,10 @@ def test_identity_must_match_request():
 
 
 def test_htf_conflict_overrides_model():
-    out = validate_read(GOOD, exp(htf_alignment="conflict"), RULES)
+    out = validate_read(GOOD, exp(htf_alignment="conflict"), HTF_RULES)
     assert out.action == "none" and not out.push and "htf_conflict" in out.notes
+    # switched off (Lorant 2026-10-04): a conflict no longer blocks
+    assert validate_read(GOOD, exp(htf_alignment="conflict"), RULES).action == "alert"
 
 
 @pytest.mark.parametrize(
@@ -220,5 +223,6 @@ def test_grade_b_from_llm_is_silent_and_rules_still_apply():
     ct = validate_recommendation(rec(candidate_id=2), CANDS, exp(last_close=24312.0), RULES)
     assert ct.action == "watch"  # counter-trend outside a range edge is downgraded
     assert (
-        validate_recommendation(rec(), CANDS, exp(htf_alignment="conflict"), RULES).action == "none"
+        validate_recommendation(rec(), CANDS, exp(htf_alignment="conflict"), HTF_RULES).action
+        == "none"
     )

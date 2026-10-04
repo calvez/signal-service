@@ -8,6 +8,7 @@ from app.config import BrooksCfg
 from app.strategies import brooks_h2 as B
 
 CFG = BrooksCfg()
+NO_H1 = CFG.model_copy(update={"htf_ema_filter": "off"})  # the spec's three trend rules only
 T0 = pd.Timestamp("2026-10-05 07:00", tz="UTC")
 POINT = 0.1
 
@@ -71,12 +72,12 @@ def test_trend_needs_all_three():
     ema = [90 + i * 0.5 for i in range(12)]
     sh = [np.nan] * 12
     sh[5], sh[9] = 104.0, 108.0
-    assert B.trend(view(frame(rows, ema=ema, sh_price=sh)), CFG)[0]
+    assert B.trend(view(frame(rows, ema=ema, sh_price=sh)), NO_H1)[0]
     sh_lower = list(sh)
     sh_lower[9] = 103.0  # last swing high lower
-    assert not B.trend(view(frame(rows, ema=ema, sh_price=sh_lower)), CFG)[0]
+    assert not B.trend(view(frame(rows, ema=ema, sh_price=sh_lower)), NO_H1)[0]
     flat = [95.0] * 12  # EMA not rising
-    assert not B.trend(view(frame(rows, ema=flat, sh_price=sh)), CFG)[0]
+    assert not B.trend(view(frame(rows, ema=flat, sh_price=sh)), NO_H1)[0]
 
 
 def test_setup_type_h2_and_h1():
@@ -208,3 +209,27 @@ def test_room_can_ignore_the_pullback_high():
         pb_high=115.0,
     )
     assert strict == (False, 115.0) and loose == (True, None)
+
+
+# ------------------------------------------------------------------ the two EMAs (Lorant)
+def test_two_emas_modes():
+    assert B.two_emas(110, 105, 100, "price_above")[0]
+    assert not B.two_emas(99, 105, 100, "price_above")[0]  # below the 60-minute EMA
+    assert B.two_emas(110, 105, 100, "ema_order")[0]
+    assert not B.two_emas(110, 95, 100, "ema_order")[0]  # M5 EMA below the 60-minute EMA
+    assert not B.two_emas(110, 95, 100, "both")[0]
+    assert B.two_emas(99, 95, 100, "off")[0]
+    assert not B.two_emas(110, 105, None, "price_above")[0]  # no 60-minute EMA: fail closed
+
+
+def test_trend_uses_the_60_minute_ema_and_mirrors_for_shorts():
+    rows = [(100 + i, 101 + i, 99 + i, 100.5 + i) for i in range(12)]
+    ema = [90 + i * 0.5 for i in range(12)]
+    sh = [np.nan] * 12
+    sh[5], sh[9] = 104.0, 108.0
+    v = view(frame(rows, ema=ema, sh_price=sh))
+    assert B.trend(v, CFG, 105.0)[0]  # close 111.5 above 105
+    assert not B.trend(v, CFG, 115.0)[0]  # close below the 60-minute EMA
+    # a short sees the mirrored 60-minute EMA: real 115 above price is "below" in its view
+    m = B.View(B.mirror(frame(rows, ema=ema, sh_price=sh)), -1.0, POINT)
+    assert B.BrooksH2.h1_ema_in_view(type("E", (), {"h1_ema": 115.0}), m) == -115.0

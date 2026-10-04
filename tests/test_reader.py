@@ -188,6 +188,7 @@ def test_just_fresh_enough_is_not_stale(settings):
 
 
 def test_skip_htf_conflict(settings):
+    settings.config.rules.require_htf_alignment = True  # the rule is switchable, off by default
     llm, fake = make(settings, FakeOpenRouter(), d1_drift=-5.0)  # D1 bear vs H1 bull
     skipped(settings, llm, fake, "htf_conflict")
 
