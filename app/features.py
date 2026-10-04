@@ -140,6 +140,25 @@ def classify_bars(df: pd.DataFrame, atr_s: pd.Series | None = None) -> pd.DataFr
     return out
 
 
+def reversal_bars(df: pd.DataFrame, shapes: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Explicit reversal bars, used to EXIT a position (management.exit_on_reversal).
+
+    bear_reversal (exit a long):  a bear trend bar (body >= 50 % of the range, close in the
+                                  bottom third) that closes BELOW the previous bar's low
+    bull_reversal (exit a short): a bull trend bar that closes ABOVE the previous bar's high
+
+    Uses the bar itself and the previous bar only. Known when the bar has closed.
+    """
+    shapes = classify_bars(df) if shapes is None else shapes
+    return pd.DataFrame(
+        {
+            "bear_reversal": shapes["trend_bear"] & (df["c"] < df["l"].shift(1)),
+            "bull_reversal": shapes["trend_bull"] & (df["c"] > df["h"].shift(1)),
+        },
+        index=df.index,
+    )
+
+
 # --------------------------------------------------------------------------- swings
 def confirmed_swings(df: pd.DataFrame, n: int = 2) -> pd.DataFrame:
     """Swing highs/lows, reported when they become CONFIRMED.

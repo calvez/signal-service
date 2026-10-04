@@ -8,19 +8,24 @@ How one position is played (long; short is the mirror image):
                 sized so that 1R = rules.risk_pct % of the initial balance.
   2. ADDS       Each time price trades another `add_every_r` R above the first entry
                 (1R, 2R, ... measured from the first entry), a further unit of
-                `add_size` x the first unit is bought at that price, at most `max_adds` times.
+                `add_size` x the first unit is bought at that price; `max_adds` None = no limit.
   3. STOP       After every add the common stop is raised so that the WHOLE position never
                 loses more than `max_open_risk_r` R if it is hit:
                     stop >= (sum(q_i * e_i) - max_open_risk_r * R) / sum(q_i)
                 Exposure up -> stop tighter. With `trail = swing` the stop also follows the
                 last CONFIRMED M5 swing low (minus one tick) once it is above the stop.
                 The stop only ever moves in the trade's favour.
-  4. EXIT       The whole position at the stop, or at the last close before the horizon
-                (cash close of that day: day trading, flat at the end of the day).
+  4. EXIT       The whole position, at the first of:
+                - the stop
+                - a REVERSAL BAR against the position (`exit_on_reversal`): at the close of
+                  that M5 bar. Which bars count is decided by the caller (`reversal_exits`,
+                  see backtest.reversal_exits); only bars that close after the entry count.
+                - the last close before the horizon: flat before the end of the day.
   5. ORDER IN A BAR (we only know high and low, so always the worse case first):
-                trail update (the swing level is known before the bar starts) -> stop check
-                -> adds -> risk-based stop update -> stop check again (an add in a bar that
-                also reached the raised stop is stopped out in that bar).
+                reversal exit (the reversal bar closed before this bar) -> trail update (the
+                swing level is known before the bar starts) -> stop check -> adds ->
+                risk-based stop update -> stop check again (an add in a bar that also reached
+                the raised stop is stopped out in that bar).
 
 Result in R of the first unit's risk; result_pct = R x risk_pct. Spread is charged per unit by
 the caller. No slippage, no partial fills.
@@ -38,19 +43,18 @@ GIVE_UP_AFTER_SEC = 600
 
 @dataclass(frozen=True)
 class PyramidRules:
-    risk_pct: float = 0.5  # % of the initial balance risked by the first unit (= 1R)
-    max_adds: int = 2
+    risk_pct: float = 0.3  # % of the initial balance risked by the first unit (= 1R)
+    max_adds: int | None = None  # None = no limit
     add_every_r: float = 1.0
     add_size: float = 1.0  # each add, as a multiple of the first unit
-    max_open_risk_r: float = (
-        0.0  # after an add the whole position risks at most this (0 = breakeven)
-    )
+    max_open_risk_r: float = 0.0  # after an add the whole position risks at most this (0 = BE)
     trail: str = "swing"  # swing | none
+    exit_on_reversal: bool = True
 
 
 @dataclass
 class PositionResult:
-    status: str  # pending | no_entry | stopped | closed_eod
+    status: str  # pending | no_entry | stopped | reversal | closed_eod
     r: float | None = None  # total result in R of the first unit's risk
     units: int = 0  # 1 + number of adds
     size_total: float = 0.0  # sum of unit sizes (1.0 = the first unit)
@@ -82,11 +86,14 @@ def simulate_position(
     trail_levels: pd.Series | None = None,
     now: int = 2**62,
     bar_seconds: int = M5_SEC,
+    reversal_exits: pd.Series | None = None,
 ) -> PositionResult:
     """Play one pyramiding position on `bars` (M1 or M5, UTC index) after an M5 signal.
 
     `trail_levels`: last confirmed swing low (long) / high (short), indexed by the UTC time at
-    which each value became known (M5 close). Pure function, no database.
+    which each value became known (M5 close). `reversal_exits`: close price of every M5 bar
+    that is a reversal bar AGAINST this position (NaN otherwise), indexed by its close time.
+    Pure function, no database.
     """
     long = setup["direction"] == "long"
     sign = 1.0 if long else -1.0
@@ -99,6 +106,12 @@ def simulate_position(
         lv_times = trail_levels.index.as_unit("s").asi8
     else:
         trail_levels = None
+
+    rev_times = rev_vals = None
+    if reversal_exits is not None and rules.exit_on_reversal:
+        rev_times = reversal_exits.index.as_unit("s").asi8
+        rev_vals = reversal_exits.to_numpy(dtype=float)
+    rev_i = 0  # next reversal-bar slot to look at
 
     units: list[tuple[float, float]] = []  # (entry price, size)
     stop = s0
@@ -133,10 +146,19 @@ def simulate_position(
                 continue
             units.append((e0, 1.0))
             res.entry_t = t
+            if rev_times is not None:  # only reversal bars closing after the entry count
+                rev_i = int(np.searchsorted(rev_times, t, side="right"))
             res.events.append((t, "entry", e0))
             if sign * (adverse - stop) <= 0:  # entry bar also reached the stop: worse case
                 return close_all(t, stop, "stopped")
             continue
+
+        # 0. a reversal bar against the position closed before this bar: out at its close
+        if rev_times is not None:
+            while rev_i < len(rev_times) and rev_times[rev_i] <= t:
+                if not np.isnan(rev_vals[rev_i]):
+                    return close_all(int(rev_times[rev_i]), float(rev_vals[rev_i]), "reversal")
+                rev_i += 1
 
         # 1. trail behind the last confirmed swing (known before this bar), then the stop
         lvl = _level_at(trail_levels, lv_times, t)
@@ -151,7 +173,7 @@ def simulate_position(
         # 2. adds at +1R, +2R, ... from the first entry; 3. stop so the whole position
         #    risks at most max_open_risk_r
         added = False
-        while len(units) - 1 < rules.max_adds:
+        while rules.max_adds is None or len(units) - 1 < rules.max_adds:
             n = len(units)  # next add number (1, 2, ...)
             price = e0 + sign * n * rules.add_every_r * risk_pts
             if sign * (favourable - price) < 0:
@@ -184,3 +206,60 @@ def simulate_position(
     out = close_all(last_t, last_close, "closed_eod")
     out.units, out.size_total = len(units), sum(u[1] for u in units)
     return out
+
+
+# --------------------------------------------------------------------------- shared inputs
+def max_units_by_leverage(risk_pct: float, risk_pts: float, price: float, leverage: float) -> int:
+    """How many same-size units fit under balance x leverage.
+
+    One unit is sized so that risk_pts points = risk_pct % of the balance, so its notional is
+    (risk_pct/100 x balance / risk_pts) x price. Units <= leverage x risk_pts / (risk_pct/100 x
+    price). Example: GER40 at 24,000, 27-point stop, 0.3 %, 20:1 -> 7 units. At least 1.
+    """
+    if risk_pts <= 0 or price <= 0 or risk_pct <= 0:
+        return 1
+    return max(1, int(leverage * risk_pts / (risk_pct / 100 * price)))
+
+
+def capped_rules(rules: PyramidRules, setup: dict, leverage: float) -> PyramidRules:
+    """`rules` with max_adds limited by the leverage cap for this setup."""
+    from dataclasses import replace
+
+    risk_pts = abs(float(setup["entry"]) - float(setup["stop"]))
+    room = max_units_by_leverage(rules.risk_pct, risk_pts, float(setup["entry"]), leverage) - 1
+    adds = room if rules.max_adds is None else min(rules.max_adds, room)
+    return replace(rules, max_adds=adds)
+
+
+def rules_from_config(mg) -> PyramidRules:
+    """PyramidRules from config.management."""
+    return PyramidRules(
+        risk_pct=mg.risk_pct, max_adds=mg.max_adds, add_every_r=mg.add_every_r,
+        add_size=mg.add_size, max_open_risk_r=mg.max_open_risk_r, trail=mg.trail,
+        exit_on_reversal=mg.exit_on_reversal,
+    )  # fmt: skip
+
+
+def exit_inputs(m5: pd.DataFrame, swing_n: int) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """Per direction: (trailing levels, reversal exits) from closed M5 bars, each indexed by the
+    time the value became known (the M5 bar's close). Used by the backtest and live outcomes."""
+    from app import features
+
+    known_at = m5.index + pd.Timedelta(seconds=M5_SEC)
+    last = features.last_swings(features.confirmed_swings(m5, swing_n))
+    rev = features.reversal_bars(m5)
+    close = m5["c"].to_numpy(dtype=float)
+
+    def series(values) -> pd.Series:
+        return pd.Series(values, index=known_at, dtype=float)
+
+    return {
+        "long": (
+            series(last["last_sl_price"].to_numpy()),
+            series(np.where(rev["bear_reversal"].to_numpy(), close, np.nan)),
+        ),
+        "short": (
+            series(last["last_sh_price"].to_numpy()),
+            series(np.where(rev["bull_reversal"].to_numpy(), close, np.nan)),
+        ),
+    }

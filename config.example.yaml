@@ -74,12 +74,16 @@ engine:
   prompt_version: "v3"
 
 management:
-  # How a position is played after the entry (app/position.py). Lorant: no fixed target,
-  # pyramiding into runners, stop follows the growing exposure. Placeholder numbers: to be set.
+  # How a position is played after the entry (app/position.py). Lorant (2026-10-04): no fixed
+  # target, pyramiding into runners with same-size adds and no limit, out on a reversal bar or
+  # before the end of the day, first unit 0.3 %.
   mode: "pyramid"          # pyramid | fixed_target (target from the setup, old behaviour)
-  risk_pct: 0.5            # first unit risks 0.5% of the initial balance = 1R (EUR 800 on 160k)
-  max_adds: 2              # at most 2 more units
-  add_every_r: 1.0         # add one unit each time price runs another +1R from the first entry
+  risk_pct: 0.3            # first unit risks 0.3 % of the initial balance = 1R (EUR 480 on 160k)
+  max_adds: null           # no limit
+  add_every_r: 1.0         # PLACEHOLDER: add one unit each time price runs another +1R
   add_size: 1.0            # each add = 1x the first unit
   max_open_risk_r: 0.0     # after an add the stop moves so the whole position cannot lose (0R)
   trail: "swing"           # also trail behind the last confirmed M5 swing (or "none")
+  exit_on_reversal: true   # out at the close of a reversal bar against the position
+  flat_before_close_min: 5 # always flat 5 minutes before the cash close
+  max_leverage: 20.0       # PLACEHOLDER (verify in MT5): exposure <= balance x leverage caps the adds

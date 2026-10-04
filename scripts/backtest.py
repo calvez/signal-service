@@ -61,9 +61,12 @@ def main() -> int:
           f"{'all signals' if args.all_signals else 'his trade rules'} · "
           f"{'M5' if args.no_m1 else 'M1'} outcomes · SIMULATED, net of spread")  # fmt: skip
     mg = cfg.management
-    print(f"management: {mg.mode} · first unit risks {mg.risk_pct}% = 1R · "
-          f"up to {mg.max_adds} adds every {mg.add_every_r}R · stop keeps open risk <= "
-          f"{mg.max_open_risk_r}R after adds · trail {mg.trail}")  # fmt: skip
+    adds = "no limit" if mg.max_adds is None else f"up to {mg.max_adds}"
+    print(f"management: {mg.mode} · first unit risks {mg.risk_pct}% = 1R · adds: {adds} "
+          f"(leverage cap {mg.max_leverage:g}:1), same size, every +{mg.add_every_r}R · "
+          f"stop keeps open risk <= {mg.max_open_risk_r}R after adds · trail {mg.trail} · "
+          f"exit on reversal bar: {mg.exit_on_reversal} · flat {mg.flat_before_close_min} min "
+          f"before the close")  # fmt: skip
     print(backtest.report(trades, epoch(args.split) if args.split else None, cfg.ftmo))
     out = Path(args.out or f"data/backtests/{strategy.name}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)

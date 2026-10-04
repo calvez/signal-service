@@ -72,11 +72,16 @@ def target_line(cfg: AppConfig, entry: float, risk: float, target, long: bool, d
     if target is not None and mg.mode == "fixed_target":
         return f"Target {target:.{d}f}  ({abs(target - entry) / risk:.1f}R)"
     sign = 1 if long else -1
-    adds = ", ".join(f"{entry + sign * k * mg.add_every_r * risk:.{d}f}"
-                     for k in range(1, mg.max_adds + 1))  # fmt: skip
+    shown = 2 if mg.max_adds is None else min(mg.max_adds, 2)
+    adds = ", ".join(
+        f"{entry + sign * k * mg.add_every_r * risk:.{d}f}" for k in range(1, shown + 1)
+    )
+    more = " …" if mg.max_adds is None or mg.max_adds > 2 else ""
     stop_rule = "breakeven" if mg.max_open_risk_r == 0 else f"max {mg.max_open_risk_r:g}R open risk"
-    return (f"Target runner · add at {adds} · after each add stop to {stop_rule}"
-            f"{', trail swings' if mg.trail == 'swing' else ''}")  # fmt: skip
+    exits = "reversal bar or " if mg.exit_on_reversal else ""
+    return (f"Target runner · add at {adds}{more} · after each add stop to {stop_rule}"
+            f"{', trail swings' if mg.trail == 'swing' else ''} · out on {exits}"
+            f"{mg.flat_before_close_min} min before the close")  # fmt: skip
 
 
 def feedback_buttons(read_id: int, chosen: str | None = None) -> dict:

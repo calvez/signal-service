@@ -120,12 +120,17 @@ class ManagementCfg(_Strict):
     """How a position is managed after the entry (app/position.py)."""
 
     mode: Literal["pyramid", "fixed_target"] = "pyramid"
-    risk_pct: float = 0.5  # % of the initial balance risked by the first unit (= 1R)
-    max_adds: int = 2
+    risk_pct: float = 0.3  # % of the initial balance risked by the first unit (= 1R)
+    max_adds: int | None = None  # None = no limit
     add_every_r: float = 1.0
     add_size: float = 1.0
     max_open_risk_r: float = 0.0  # after an add the whole position risks at most this
     trail: Literal["swing", "none"] = "swing"
+    exit_on_reversal: bool = True  # exit at the close of a reversal bar against the position
+    flat_before_close_min: int = 5  # flat this many minutes before the cash close
+    # "No limit" on adds still has a physical limit: the margin. Total exposure (notional) may
+    # not exceed balance x max_leverage. PLACEHOLDER: verify FTMO's index leverage in MT5.
+    max_leverage: float = 20.0
 
 
 class EngineCfg(_Strict):

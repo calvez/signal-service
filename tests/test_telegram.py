@@ -371,4 +371,5 @@ def test_runner_alert_shows_the_pyramid_plan(tg, settings):
     seed_read(settings)  # long 24325, stop 24298 -> 1R = 27 points
     svc.send_pending_reads(NOW)
     text = fake.sent()[0]["text"]
-    assert "Target runner · add at 24352.0, 24379.0 · after each add stop to breakeven" in text
+    assert "Target runner · add at 24352.0, 24379.0 … · after each add stop to breakeven" in text
+    assert "out on reversal bar or 5 min before the close" in text

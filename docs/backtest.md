@@ -68,16 +68,19 @@ The example above is only an illustration of the interface, not a chosen strateg
 
 Lorant's style: no fixed profit target. When a trade becomes a runner, add to it; the stop follows the growing exposure. `app/position.py` plays every position like that (`mode: pyramid`, the default; `fixed_target` keeps the old stop-or-target simulation):
 
-| Setting | Meaning | Placeholder |
+| Setting | Meaning | Value |
 |---|---|---|
-| `risk_pct` | the first unit risks this % of the initial balance = **1R** | 0.5 (= EUR 800 on 160k) |
-| `add_every_r` | add one unit each time price runs another +X R from the first entry | 1.0 |
-| `max_adds` | at most this many adds | 2 |
-| `add_size` | size of each add, × the first unit | 1.0 |
+| `risk_pct` | the first unit risks this % of the initial balance = **1R** | **0.3** (= EUR 480 on 160k) — Lorant |
+| `add_size` | size of each add, × the first unit | **1.0** (same size) — Lorant |
+| `max_adds` | at most this many adds | **null = no limit** — Lorant |
+| `max_leverage` | the physical limit of "no limit": total exposure ≤ balance × leverage (e.g. GER40 at 24,000, 27-pt stop, 0.3 %, 20:1 → 7 units) | 20 — placeholder, verify FTMO's index leverage in MT5 |
+| `add_every_r` | add one unit each time price runs another +X R from the first entry | 1.0 — placeholder |
 | `max_open_risk_r` | after each add the common stop moves so the WHOLE position risks at most this; 0 = breakeven, negative = locks in profit | 0.0 |
 | `trail` | also trail behind the last confirmed M5 swing low/high | swing |
+| `exit_on_reversal` | out at the close of an explicit reversal bar against the position (`features.reversal_bars`: against a long, a bear trend bar closing below the previous bar's low; mirrored) | **true** — Lorant |
+| `flat_before_close_min` | always flat this many minutes before the cash close | **5** — Lorant ("always close before the end of the day") |
 
-Exit: the stop, or flat at the cash close. Inside a bar the worse case comes first (stop before add; an add whose raised stop is also reached in that bar is stopped out). A candidate may have `target=None` (runner); `check_setup` then skips the reward/risk rule. Results are in R of the first unit's risk and in % of the account; spread is charged per unit.
+Exit: the stop, a reversal bar, or flat before the close — whichever comes first. Inside a bar the worse case comes first (stop before add; an add whose raised stop is also reached in that bar is stopped out). A candidate may have `target=None` (runner); `check_setup` then skips the reward/risk rule. Results are in R of the first unit's risk and in % of the account; spread is charged per unit.
 
 The backtest report shows W/S/L (win > +0.25R, scratch within ±0.25R — typically stopped at breakeven after an add — loss < −0.25R), the share of the gross profit made by the 5 best trades (runner systems live from a few big trades), and an **FTMO check**: worst FTMO day vs. the −5 % daily limit and max drawdown vs. the −10 % limit, in % of the initial balance.
 

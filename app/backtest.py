@@ -31,11 +31,11 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
-from app import db, features, sessions
+from app import db, sessions
 from app.config import AppConfig
 from app.evaluation import D1_WINDOW, H1_WINDOW, M5_WINDOW, Skip, evaluate_bar
 from app.outcomes import simulate
-from app.position import PyramidRules, simulate_position
+from app.position import capped_rules, exit_inputs, rules_from_config, simulate_position
 from app.validate import check_setup
 
 M5_SEC = 300
@@ -118,15 +118,8 @@ def run(
     d1_times = d1.index.as_unit("s").asi8
 
     mg = cfg.management
-    pyramid = PyramidRules(mg.risk_pct, mg.max_adds, mg.add_every_r, mg.add_size,
-                           mg.max_open_risk_r, mg.trail)  # fmt: skip
-    # Trailing levels: last CONFIRMED swing low/high, known when its confirming M5 bar closed.
-    last = features.last_swings(features.confirmed_swings(m5, cfg.features.swing_confirm_bars))
-    known_at = m5.index + pd.Timedelta(seconds=M5_SEC)
-    trail = {
-        "long": pd.Series(last["last_sl_price"].to_numpy(), index=known_at),
-        "short": pd.Series(last["last_sh_price"].to_numpy(), index=known_at),
-    }
+    pyramid = rules_from_config(mg)
+    exits = exit_inputs(m5, cfg.features.swing_confirm_bars)  # trailing + reversal bars
 
     trades: list[Trade] = []
     htf_cache: dict = {}
@@ -175,7 +168,8 @@ def run(
                     tr.status = "skipped_rules"
                     trades.append(tr)
                     continue
-                horizon = sessions.cash_close_utc(cfg, session, day)
+                # always flat before the end of the day
+                horizon = sessions.cash_close_utc(cfg, session, day) - mg.flat_before_close_min * 60
                 bars, secs = (m1, 60) if m1 is not None else (m5, M5_SEC)
                 lo_ts = pd.Timestamp(t + M5_SEC, unit="s", tz="UTC")
                 hi_ts = pd.Timestamp(horizon, unit="s", tz="UTC")
@@ -183,12 +177,14 @@ def run(
                 spread = float(m5["sp"].iloc[i]) * point
                 risk = abs(s["entry"] - s["stop"])
                 if mg.mode == "pyramid" or s["target"] is None:
-                    p = simulate_position(s, t, after, horizon, pyramid, point,
-                                          trail[s["direction"]], bar_seconds=secs)  # fmt: skip
+                    trail_lv, reversals = exits[s["direction"]]
+                    rules = capped_rules(pyramid, s, mg.max_leverage)
+                    p = simulate_position(s, t, after, horizon, rules, point, trail_lv,
+                                          bar_seconds=secs, reversal_exits=reversals)  # fmt: skip
                     tr.status, tr.r_gross, tr.entry_utc, tr.exit_utc = (
                         p.status, p.r, p.entry_t, p.exit_t)  # fmt: skip
                     tr.units, tr.mfe_r = p.units, p.mfe_r
-                    done, size = p.status in ("stopped", "closed_eod"), p.size_total
+                    done, size = p.status in ("stopped", "reversal", "closed_eod"), p.size_total
                 else:
                     o = simulate(s, t, after, horizon, now=2**62, bar_seconds=secs)
                     tr.status, tr.r_gross, tr.entry_utc, tr.exit_utc = (

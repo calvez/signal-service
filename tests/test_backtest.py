@@ -120,11 +120,15 @@ def test_pyramid_mode_plays_a_runner(settings, hist):
     hist.commit()
     (tr,) = run(settings, hist, Runner()).trades
     # the bars after BAR jump far up: entry, both adds, held to the end of the data / close
-    assert tr.target is None and tr.units == 3 and tr.status in ("closed_eod", "stopped")
-    assert tr.r_net > 2 and tr.result_pct == pytest.approx(tr.r_net * 0.5, abs=1e-3)
-    assert tr.cost_r == pytest.approx(round(0.1 * 3 / abs(tr.entry - tr.stop), 3))  # per unit
+    from app.position import max_units_by_leverage
+
+    cap = max_units_by_leverage(0.3, abs(tr.entry - tr.stop), tr.entry, 20.0)
+    assert tr.target is None and tr.units == cap > 1  # no add limit, but the leverage cap
+    assert tr.status in ("closed_eod", "stopped", "reversal") and tr.r_net > 2
+    assert tr.result_pct == pytest.approx(tr.r_net * 0.3, abs=1e-3)
+    assert tr.cost_r == pytest.approx(round(0.1 * cap / abs(tr.entry - tr.stop), 3))  # per unit
     s = backtest.stats([tr], settings.config.ftmo)
-    assert s["worst_day_pct"] > 0 and s["daily_limit_breaches"] == 0 and s["avg_units"] == 3
+    assert s["worst_day_pct"] > 0 and s["daily_limit_breaches"] == 0 and s["avg_units"] == cap
     assert "FTMO check" in backtest.report([tr], None, settings.config.ftmo)
 
 

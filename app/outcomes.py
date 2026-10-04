@@ -105,22 +105,20 @@ def _horizon(cfg: AppConfig, session: str, signal_open: int) -> int:
 
 def _pyramid_outcome(conn, cfg: AppConfig, r, setup: dict, horizon: int, now: int) -> Outcome:
     """Play the alert as a pyramiding position (app/position.py) and report it in the same
-    terms as before: stopped with a profit = win, stopped at a loss or flat = loss,
-    still open at the cash close = expired."""
-    from app import features
-    from app.position import PyramidRules, simulate_position
+    terms as before: closed by stop or reversal bar with a profit = win, otherwise loss;
+    closed before the end of the day = expired."""
+    from app.position import capped_rules, exit_inputs, rules_from_config, simulate_position
 
     mg = cfg.management
     t = r["bar_time_utc"]
+    horizon = horizon - mg.flat_before_close_min * 60  # always flat before the end of the day
     hist = db.load_bars_between(conn, r["symbol"], "M5", t - 600 * M5_SEC, horizon)
     after = hist[hist.index >= pd.Timestamp(t + M5_SEC, unit="s", tz="UTC")]
-    last = features.last_swings(features.confirmed_swings(hist, cfg.features.swing_confirm_bars))
-    col = "last_sl_price" if setup["direction"] == "long" else "last_sh_price"
-    levels = pd.Series(last[col].to_numpy(), index=hist.index + pd.Timedelta(seconds=M5_SEC))
+    trail_lv, reversals = exit_inputs(hist, cfg.features.swing_confirm_bars)[setup["direction"]]
     tick = 10 ** -(db.get_digits(conn, r["symbol"]) or 1)
-    rules = PyramidRules(mg.risk_pct, mg.max_adds, mg.add_every_r, mg.add_size,
-                         mg.max_open_risk_r, mg.trail)  # fmt: skip
-    p = simulate_position(setup, t, after, horizon, rules, tick, levels, now)
+    rules = capped_rules(rules_from_config(mg), setup, mg.max_leverage)
+    p = simulate_position(setup, t, after, horizon, rules, tick, trail_lv, now,
+                          reversal_exits=reversals)  # fmt: skip
     if p.status in ("pending", "no_entry"):
         return Outcome(p.status, None, p.entry_t, None)
     status = "expired" if p.status == "closed_eod" else ("win" if p.r > 0 else "loss")
