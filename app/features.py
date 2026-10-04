@@ -251,7 +251,13 @@ def leg_counts(
     `last_sl` / `last_sh`: price of the last confirmed swing low/high known at each row
     (NaN if none yet). `day`: label per row; counters reset when it changes (default: one day).
 
-    Columns: h_count, h_bar (this bar is an H bar), l_count, l_bar.
+    Columns: h_count, h_bar (this bar IS the H1/H2/... bar), h_pb (a pullback is armed: the
+    next bar that trades above this bar's high becomes H<h_count+1>), and the bear mirror
+    l_count, l_bar, l_pb.
+
+    For ENTRIES this distinction matters: Brooks puts the buy stop above a bar while `h_pb` is
+    armed, and the bar that triggers it becomes the H bar. A signal bar for an "H2 entry"
+    therefore has h_count == 1 and h_pb == True (see strategies/brooks_h2.setup_type).
     """
     h, low = df["h"].to_numpy(), df["l"].to_numpy()
     sl, sh = last_sl.to_numpy(), last_sh.to_numpy()
@@ -259,6 +265,7 @@ def leg_counts(
     size = len(df)
     h_count, l_count = np.zeros(size, dtype=int), np.zeros(size, dtype=int)
     h_bar, l_bar = np.zeros(size, dtype=bool), np.zeros(size, dtype=bool)
+    h_arm, l_arm = np.zeros(size, dtype=bool), np.zeros(size, dtype=bool)
 
     hc = lc = 0
     h_pb = l_pb = False
@@ -290,8 +297,17 @@ def leg_counts(
                 lc, l_pb = lc + 1, False
                 l_bar[i] = True
         h_count[i], l_count[i] = hc, lc
+        h_arm[i], l_arm[i] = h_pb, l_pb
     return pd.DataFrame(
-        {"h_count": h_count, "h_bar": h_bar, "l_count": l_count, "l_bar": l_bar}, index=df.index
+        {
+            "h_count": h_count,
+            "h_bar": h_bar,
+            "h_pb": h_arm,
+            "l_count": l_count,
+            "l_bar": l_bar,
+            "l_pb": l_arm,
+        },
+        index=df.index,
     )
 
 

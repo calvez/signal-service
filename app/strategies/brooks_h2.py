@@ -21,6 +21,7 @@ _SWAP = {
     "h": "l", "l": "h", "sh_price": "sl_price", "sl_price": "sh_price",
     "last_sh_price": "last_sl_price", "last_sl_price": "last_sh_price",
     "h_count": "l_count", "l_count": "h_count", "h_bar": "l_bar", "l_bar": "h_bar",
+    "h_pb": "l_pb", "l_pb": "h_pb",
 }  # fmt: skip
 _PRICES = ["o", "h", "l", "c", "ema", "sh_price", "sl_price", "last_sh_price", "last_sl_price"]
 
@@ -145,17 +146,23 @@ def pullback(v: View, cfg) -> Pullback | None:
 
 
 def setup_type(v: View, cfg) -> tuple[bool, str]:
-    """H2 (or H1 with allow_h1): SB is the second (first) bar of the pullback whose high went
-    above the prior bar's high (features.leg_counts)."""
+    """Which H entry would a buy stop above SB create?
+
+    Brooks counts an H bar when price trades above the previous bar's high while a pullback is
+    armed. The entry is a stop order ABOVE the signal bar, so the bar that fills it becomes the
+    next H bar: buying above SB creates H(h_count + 1). An H2 entry therefore needs a signal bar
+    with h_count == 1 (H1 has already come and failed) and an armed pullback (features.leg_counts
+    `h_pb`). Requiring SB to BE the H2 bar would be an H3 entry.
+    """
     sb = v.sb
-    if not bool(sb.get("h_bar", False)):
-        return False, "none"
-    n = int(sb.get("h_count", 0))
+    if not bool(sb.get("h_pb", False)):
+        return False, "none"  # no pullback armed: a break of SB's high is not an H entry
+    n = int(sb.get("h_count", 0)) + 1
     if n == 2:
         return True, "H2"
     if n == 1 and cfg.allow_h1:
         return True, "H1"
-    return False, f"H{n}" if n else "none"
+    return False, f"H{n}"
 
 
 def pullback_depth(v: View, pb: Pullback, cfg) -> tuple[bool, dict]:

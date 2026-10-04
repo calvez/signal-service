@@ -19,7 +19,7 @@ def frame(rows, **cols):
     df = pd.DataFrame(rows, columns=list("ohlc"), index=idx, dtype=float)
     defaults = {"sp": 1.0, "ema": np.nan, "sh_price": np.nan, "sl_price": np.nan,
                 "last_sh_price": np.nan, "last_sl_price": np.nan, "h_count": 0, "l_count": 0,
-                "h_bar": False, "l_bar": False}  # fmt: skip
+                "h_bar": False, "l_bar": False, "h_pb": False, "l_pb": False}  # fmt: skip
     for k, v in {**defaults, **cols}.items():
         df[k] = v
     return df
@@ -80,14 +80,20 @@ def test_trend_needs_all_three():
     assert not B.trend(view(frame(rows, ema=flat, sh_price=sh)), NO_H1)[0]
 
 
-def test_setup_type_h2_and_h1():
-    df = frame(base_bars(3), h_bar=[False, False, True], h_count=[0, 1, 2])
-    assert B.setup_type(view(df), CFG) == (True, "H2")
-    h1 = frame(base_bars(3), h_bar=[False, False, True], h_count=[0, 0, 1])
+def test_setup_type_is_the_entry_not_the_bar():
+    """Buying above SB creates H(h_count + 1), so an H2 entry needs h_count == 1 and an armed
+    pullback. SB being the H2 bar itself would be an H3 entry."""
+    h2 = frame(base_bars(3), h_count=[0, 1, 1], h_pb=[False, False, True])
+    assert B.setup_type(view(h2), CFG) == (True, "H2")
+    # the old (wrong) shape: SB IS the H2 bar, no pullback armed -> not a setup
+    was_h2 = frame(base_bars(3), h_count=[0, 1, 2], h_bar=[False, False, True], h_pb=False)
+    assert B.setup_type(view(was_h2), CFG) == (False, "none")
+    # armed but H1 already counted twice -> buying above SB would be H3
+    h3 = frame(base_bars(3), h_count=[0, 1, 2], h_pb=[False, False, True])
+    assert B.setup_type(view(h3), CFG) == (False, "H3")
+    h1 = frame(base_bars(3), h_count=0, h_pb=[False, False, True])
     assert B.setup_type(view(h1), CFG) == (False, "H1")
     assert B.setup_type(view(h1), CFG.model_copy(update={"allow_h1": True})) == (True, "H1")
-    no_bar = frame(base_bars(3), h_count=[0, 1, 2])
-    assert not B.setup_type(view(no_bar), CFG)[0]
 
 
 def pullback_frame(depth_close=104.0, bars_down=4, ema=103.0, last_hl=100.0):

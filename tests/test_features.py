@@ -327,3 +327,22 @@ def test_htf_ema_before_any_closed_hour_is_nan():
     m5 = pd.date_range("2026-10-05 10:00", periods=3, freq="5min", tz="UTC")
     assert F.htf_ema_on_ltf(m5, h1, 20).isna().all()
     assert F.htf_ema_on_ltf(m5, h1.iloc[0:0], 20).isna().all()
+
+
+def test_leg_counts_arms_the_pullback_flag_for_entries():
+    """h_pb marks "a buy stop above this bar's high would become the next H bar"."""
+    # up, pullback, H1, pullback again, H2
+    pairs = [(10, 8), (12, 9), (14, 11), (13, 10.5), (13.5, 11), (13.2, 10.8), (13.8, 11.2)]
+    r = counts(pairs)
+    assert r["h_count"].tolist() == [0, 0, 0, 0, 1, 1, 2]
+    assert r["h_bar"].tolist() == [False, False, False, False, True, False, True]
+    # bar 3 is a lower high -> armed, a break above it would be H1
+    # bar 5 is a lower high after H1 -> armed, a break above it would be H2 (the signal bar)
+    assert r["h_pb"].tolist() == [False, False, False, True, False, True, False]
+
+
+def test_leg_counts_pullback_flag_mirrors_on_the_bear_side():
+    pairs = [(12, 10), (11, 8), (9, 6), (9.5, 7), (9, 6.5), (9.2, 7.2), (8.8, 6.4)]
+    r = counts(pairs)
+    assert r["l_count"].tolist() == [0, 0, 0, 0, 1, 1, 2]
+    assert r["l_pb"].tolist() == [False, False, False, True, False, True, False]
